@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Squish — Media Compressor</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="min-h-screen bg-[#0a0a0f] text-white">
+<div class="max-w-3xl mx-auto px-4 py-10 pb-24">
+  <header class="mb-10 text-center">
+    <div class="inline-flex items-center gap-2 mb-3">
+      <span class="text-3xl">⚡</span>
+      <h1 class="text-4xl font-extrabold tracking-tight font-syne text-white">Squish</h1>
+    </div>
+    <p class="text-slate-400 font-dm text-sm">Compress images, videos & audio — lossless quality, massive size reduction</p>
+  </header>
+
+  <div id="dropzone" class="drop-zone rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900/50 p-10 text-center cursor-pointer transition-all hover:border-violet-500 hover:bg-slate-900 mb-6">
+    <div class="pointer-events-none">
+      <div class="text-5xl mb-3">📦</div>
+      <p class="font-syne font-bold text-lg text-white mb-1">Drop files here</p>
+      <p class="text-slate-400 text-sm font-dm">or tap to browse — images, videos, audio</p>
+      <p class="text-slate-600 text-xs mt-2 font-dm">JPG · PNG · WEBP · MP4 · MOV · MP3 · WAV · and more</p>
+    </div>
+    <input type="file" id="fileInput" multiple accept="image/*,video/*,audio/*" class="hidden">
+  </div>
+
+  <div id="fileList" class="space-y-2 mb-6 hidden"></div>
+
+  <div id="actions" class="hidden flex gap-3 mb-8">
+    <button id="compressBtn" class="flex-1 bg-violet-600 hover:bg-violet-500 active:scale-95 text-white font-syne font-bold py-3.5 rounded-xl transition-all text-sm tracking-wide">
+      Compress Files
+    </button>
+    <button id="clearBtn" class="px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-dm rounded-xl transition-all text-sm">
+      Clear
+    </button>
+  </div>
+
+  <div id="progress" class="hidden mb-6">
+    <div class="flex justify-between text-xs text-slate-400 font-dm mb-2">
+      <span>Compressing...</span>
+      <span id="progressPct">0%</span>
+    </div>
+    <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+      <div id="progressBar" class="h-full bg-violet-500 rounded-full transition-all duration-300" style="width:0%"></div>
+    </div>
+  </div>
+
+  <div id="results" class="hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-syne font-bold text-lg">Results</h2>
+      <div class="flex gap-2">
+        <button id="downloadAllBtn" class="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-syne font-semibold text-xs px-4 py-2 rounded-lg transition-all">
+          ↓ Download All
+        </button>
+      </div>
+    </div>
+    <div id="resultList" class="space-y-2 mb-5"></div>
+    <div id="summary" class="rounded-xl bg-slate-900 border border-slate-800 px-5 py-4 flex flex-wrap gap-4 text-sm font-dm mb-5">
+      <div><span class="text-slate-500">Original</span> <span id="sumOriginal" class="text-white font-medium ml-1"></span></div>
+      <div><span class="text-slate-500">Compressed</span> <span id="sumCompressed" class="text-white font-medium ml-1"></span></div>
+      <div><span class="text-slate-500">Saved</span> <span id="sumSaved" class="text-emerald-400 font-bold ml-1"></span></div>
+    </div>
+    <div id="mobileDeleteHint" class="rounded-xl bg-amber-950/40 border border-amber-800/40 px-5 py-4 text-xs text-amber-300 font-dm hidden">
+      <strong class="font-semibold">Tip:</strong> To free up space, go to your Photos or Files app and delete the originals after downloading the compressed versions.
+    </div>
+  </div>
+</div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

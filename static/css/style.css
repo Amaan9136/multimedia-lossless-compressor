@@ -1,0 +1,40 @@
+:root {
+  --violet: #7c3aed;
+}
+* { box-sizing: border-box; }
+body { font-family: 'DM Sans', sans-serif; }
+.font-syne { font-family: 'Syne', sans-serif; }
+.font-dm { font-family: 'DM Sans', sans-serif; }
+.drop-zone.drag-over {
+  border-color: #7c3aed;
+  background: rgba(124,58,237,0.08);
+  transform: scale(1.01);
+}
+.file-item {
+  animation: fadeIn 0.2s ease;
+}
+.result-item {
+  animation: slideUp 0.25s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.pill {
+  display: inline-block;
+  font-size: 10px;
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.pill-img { background: #1e1b4b; color: #a5b4fc; }
+.pill-vid { background: #1a1a2e; color: #f472b6; }
+.pill-aud { background: #052e16; color: #6ee7b7; }
+.pill-unk { background: #1c1917; color: #a8a29e; }
