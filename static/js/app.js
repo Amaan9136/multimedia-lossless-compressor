@@ -59,10 +59,7 @@ function renderFileList() {
     fileList.appendChild(div);
   });
   fileList.querySelectorAll(".remove-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      selectedFiles.splice(Number(btn.dataset.i), 1);
-      renderFileList();
-    });
+    btn.addEventListener("click", () => { selectedFiles.splice(Number(btn.dataset.i), 1); renderFileList(); });
   });
 }
 
@@ -92,6 +89,7 @@ function addLog(msg, cls = "text-slate-400") {
   line.textContent = msg;
   progressLog.appendChild(line);
   progressLog.scrollTop = progressLog.scrollHeight;
+  return line;
 }
 
 function clearLog() { progressLog.innerHTML = ""; }
@@ -106,68 +104,82 @@ compressBtn.addEventListener("click", async () => {
   setProgress(0);
 
   const totalSize = selectedFiles.reduce((s, f) => s + f.size, 0);
-  addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} queued — ${fmtSize(totalSize)} total`);
-  addLog(`⬆ Uploading…`);
-
   const fd = new FormData();
   selectedFiles.forEach(f => fd.append("files", f));
+
+  addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} — ${fmtSize(totalSize)} total`);
+  const uploadLine = addLog(`⬆ Uploading to local network…`);
   const uploadStart = Date.now();
 
   try {
-    const data = await new Promise((res, rej) => {
+    const resp = await new Promise((res, rej) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", "/compress");
+      xhr.responseType = "text";
       xhr.upload.onprogress = e => {
         if (!e.lengthComputable) return;
-        const pct = Math.round((e.loaded / e.total) * 60);
-        setProgress(10 + pct);
-        const elapsed = (Date.now() - uploadStart) / 1000;
+        const pct = Math.round((e.loaded / e.total) * 40);
+        setProgress(pct);
+        const elapsed = (Date.now() - uploadStart) / 1000 || 0.001;
         const rate = e.loaded / elapsed;
         const remaining = rate > 0 ? (e.total - e.loaded) / rate : 0;
-        const etaStr = remaining > 60
-          ? `${Math.ceil(remaining / 60)}m ${Math.round(remaining % 60)}s`
-          : `${Math.ceil(remaining)}s`;
-        const logLines = progressLog.querySelectorAll("div");
-        const uploadLine = [...logLines].find(l => l.textContent.startsWith("⬆"));
-        const msg = `⬆ Uploading… ${fmtSize(e.loaded)} / ${fmtSize(e.total)} (${fmtSize(rate)}/s — ETA ${etaStr})`;
-        if (uploadLine) uploadLine.textContent = msg;
+        const eta = remaining > 60 ? `${Math.ceil(remaining/60)}m ${Math.round(remaining%60)}s` : `${Math.ceil(remaining)}s`;
+        uploadLine.textContent = `⬆ Uploading… ${fmtSize(e.loaded)} / ${fmtSize(e.total)}  ${fmtSize(rate)}/s  ETA ${eta}`;
       };
       xhr.onload = () => {
         const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
-        const logLines = progressLog.querySelectorAll("div");
-        const uploadLine = [...logLines].find(l => l.textContent.startsWith("⬆"));
-        if (uploadLine) uploadLine.textContent = `✓ Upload complete — ${fmtSize(totalSize)} in ${elapsed}s`;
-        res(JSON.parse(xhr.responseText));
+        const rate = fmtSize(totalSize / (parseFloat(elapsed) || 1));
+        uploadLine.textContent = `✓ Upload done — ${fmtSize(totalSize)} in ${elapsed}s  (${rate}/s)`;
+        res(xhr.responseText);
       };
       xhr.onerror = rej;
       xhr.send(fd);
     });
 
-    setProgress(75);
-    addLog(`⚙ Compressing ${data.results.length} file${data.results.length > 1 ? "s" : ""}…`);
+    setProgress(45);
 
-    let totalCompressed = 0;
-    let okCount = 0;
-    data.results.forEach(r => {
-      const t = getType(r.original || r.name);
-      if (r.status === "ok") {
-        totalCompressed += r.compressed_size || 0;
-        okCount++;
-        const saved = r.original_size && r.compressed_size ? Math.round((1 - r.compressed_size / r.original_size) * 100) : 0;
-        addLog(`  ✓ ${r.name}  ${fmtSize(r.original_size)} → ${fmtSize(r.compressed_size)}  (−${saved}%)`, "text-emerald-400");
-      } else if (r.status === "unsupported") {
-        addLog(`  ✗ ${r.original || r.name}  unsupported format`, "text-amber-500");
-      } else {
-        addLog(`  ✗ ${r.original || r.name}  error`, "text-red-400");
+    const lines = resp.trim().split("\n").filter(Boolean);
+    let allResults = [];
+    let totalOriginalSize = 0;
+    let totalCompressedSize = 0;
+    let totalFiles = 0;
+
+    for (const line of lines) {
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+
+      if (msg.type === "start") {
+        totalOriginalSize = msg.total_original_size;
+        totalFiles = msg.total_files;
+        addLog(`⚙ Compressing ${totalFiles} file${totalFiles > 1 ? "s" : ""}  —  ${fmtSize(totalOriginalSize)} total`, "text-slate-400");
+      } else if (msg.type === "progress") {
+        const pct = 45 + Math.round(((msg.index) / totalFiles) * 50);
+        setProgress(pct);
+        addLog(`  ⟳ [${msg.index + 1}/${totalFiles}] ${msg.file}  ${fmtSize(msg.original_size)}`, "text-slate-500");
+      } else if (msg.type === "file_done") {
+        const r = msg.result;
+        totalCompressedSize = msg.total_compressed_size;
+        if (r.status === "ok") {
+          const saved = r.original_size && r.compressed_size ? Math.round((1 - r.compressed_size / r.original_size) * 100) : 0;
+          addLog(`  ✓ ${r.name}  ${fmtSize(r.original_size)} → ${fmtSize(r.compressed_size)}  (−${saved}%)`, "text-emerald-400");
+        } else if (r.status === "unsupported") {
+          addLog(`  ✗ ${r.original || r.name}  unsupported format`, "text-amber-500");
+        } else {
+          addLog(`  ✗ ${r.original || r.name}  error: ${r.error || "unknown"}`, "text-red-400");
+        }
+      } else if (msg.type === "done") {
+        allResults = msg.results;
+        sessionId = msg.session_id;
+        totalOriginalSize = msg.total_original_size;
+        totalCompressedSize = msg.total_compressed_size;
+        const saved = totalOriginalSize - totalCompressedSize;
+        const pct = totalOriginalSize > 0 && totalCompressedSize > 0 ? Math.round((saved / totalOriginalSize) * 100) : 0;
+        const okCount = allResults.filter(r => r.status === "ok").length;
+        if (okCount > 0) addLog(`📊 ${fmtSize(totalOriginalSize)} → ${fmtSize(totalCompressedSize)}  saved ${fmtSize(saved)} (${pct}%)  across ${okCount} file${okCount > 1 ? "s" : ""}`, "text-violet-400");
       }
-    });
+    }
 
-    const totalSaved = totalSize - totalCompressed;
-    const pctSaved = totalSize > 0 && totalCompressed > 0 ? Math.round((totalSaved / totalSize) * 100) : 0;
-    if (okCount > 0) addLog(`📊 ${fmtSize(totalSize)} → ${fmtSize(totalCompressed)}  saved ${fmtSize(totalSaved)} (${pctSaved}%)`, "text-violet-400");
-
-    sessionId = data.session_id;
-    renderResults(data.results);
+    renderResults(allResults);
     setProgress(100);
     setTimeout(() => { progress.classList.add("hidden"); setProgress(0); }, 800);
   } catch(e) {

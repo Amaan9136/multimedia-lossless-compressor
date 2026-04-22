@@ -1,14 +1,7 @@
-import os
-import shutil
-import socket
-import qrcode
-from flask import Flask, request, jsonify, send_file, render_template
+import os, shutil, socket, qrcode, json, uuid, mimetypes, subprocess, zipfile
+from flask import Flask, request, jsonify, send_file, render_template, Response, stream_with_context
 from flask_cors import CORS
 from PIL import Image
-import subprocess
-import zipfile
-import uuid
-import mimetypes
 
 app = Flask(__name__)
 CORS(app, origins="*")
@@ -51,31 +44,19 @@ def compress_image(input_path, output_path, filename):
         img.save(output_path, optimize=True)
 
 def compress_video(input_path, output_path):
-    cmd = [
-        "ffmpeg", "-i", input_path,
-        "-vcodec", "libx264",
-        "-crf", "28",
-        "-preset", "fast",
-        "-acodec", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-y", output_path
-    ]
-    result = subprocess.run(cmd, capture_output=True, timeout=600)
-    return result.returncode == 0
+    cmd = ["ffmpeg", "-i", input_path, "-vcodec", "libx264", "-crf", "28", "-preset", "fast", "-acodec", "aac", "-b:a", "128k", "-movflags", "+faststart", "-y", output_path]
+    return subprocess.run(cmd, capture_output=True, timeout=600).returncode == 0
 
 def compress_audio(input_path, output_path):
-    cmd = [
-        "ffmpeg", "-i", input_path,
-        "-b:a", "128k",
-        "-y", output_path
-    ]
-    result = subprocess.run(cmd, capture_output=True, timeout=300)
-    return result.returncode == 0
+    cmd = ["ffmpeg", "-i", input_path, "-b:a", "128k", "-y", output_path]
+    return subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "bmp", "tiff", "gif"}
 VIDEO_EXTS = {"mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v"}
 AUDIO_EXTS = {"mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"}
+
+def emit(obj):
+    return json.dumps(obj) + "\n"
 
 @app.route("/")
 def index():
@@ -89,53 +70,65 @@ def compress():
     session_id = str(uuid.uuid4())
     session_compressed = os.path.join(app.config["COMPRESSED_FOLDER"], session_id)
     os.makedirs(session_compressed, exist_ok=True)
-    results = []
-    for f in files:
-        if not f.filename:
-            continue
-        ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
-        original_name = f.filename
-        input_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{session_id}_{original_name}")
-        f.save(input_path)
-        original_size = os.path.getsize(input_path)
-        if ext in IMAGE_EXTS:
-            out_ext = ext if ext in ("jpg", "jpeg", "png", "webp") else "jpg"
-            out_name = original_name.rsplit(".", 1)[0] + "." + out_ext if "." in original_name else original_name + "." + out_ext
-            output_path = os.path.join(session_compressed, out_name)
+    total_original = sum(0 for _ in files)
+
+    def generate():
+        results = []
+        saved_files = []
+        for f in files:
+            if f.filename:
+                input_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{session_id}_{f.filename}")
+                f.save(input_path)
+                saved_files.append((f.filename, input_path))
+
+        total_original_size = sum(os.path.getsize(p) for _, p in saved_files)
+        yield emit({"type": "start", "total_files": len(saved_files), "total_original_size": total_original_size})
+
+        total_compressed_size = 0
+        for idx, (filename, input_path) in enumerate(saved_files):
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            original_size = os.path.getsize(input_path)
+            yield emit({"type": "progress", "file": filename, "index": idx, "total": len(saved_files), "original_size": original_size})
             try:
-                compress_image(input_path, output_path, original_name)
-                compressed_size = os.path.getsize(output_path)
-                results.append({"name": out_name, "original": original_name, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"})
-            except Exception as e:
-                results.append({"name": original_name, "original": original_name, "original_size": original_size, "compressed_size": 0, "status": "error", "error": str(e)})
-        elif ext in VIDEO_EXTS:
-            out_name = original_name.rsplit(".", 1)[0] + ".mp4" if "." in original_name else original_name + ".mp4"
-            output_path = os.path.join(session_compressed, out_name)
-            try:
-                ok = compress_video(input_path, output_path)
-                if ok and os.path.exists(output_path):
+                if ext in IMAGE_EXTS:
+                    out_ext = ext if ext in ("jpg", "jpeg", "png", "webp") else "jpg"
+                    out_name = filename.rsplit(".", 1)[0] + "." + out_ext if "." in filename else filename + "." + out_ext
+                    output_path = os.path.join(session_compressed, out_name)
+                    compress_image(input_path, output_path, filename)
                     compressed_size = os.path.getsize(output_path)
-                    results.append({"name": out_name, "original": original_name, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"})
+                    total_compressed_size += compressed_size
+                    r = {"name": out_name, "original": filename, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"}
+                elif ext in VIDEO_EXTS:
+                    out_name = filename.rsplit(".", 1)[0] + ".mp4" if "." in filename else filename + ".mp4"
+                    output_path = os.path.join(session_compressed, out_name)
+                    ok = compress_video(input_path, output_path)
+                    if ok and os.path.exists(output_path):
+                        compressed_size = os.path.getsize(output_path)
+                        total_compressed_size += compressed_size
+                        r = {"name": out_name, "original": filename, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"}
+                    else:
+                        r = {"name": filename, "original": filename, "original_size": original_size, "compressed_size": 0, "status": "error", "error": "ffmpeg failed"}
+                elif ext in AUDIO_EXTS:
+                    out_name = filename.rsplit(".", 1)[0] + ".mp3" if "." in filename else filename + ".mp3"
+                    output_path = os.path.join(session_compressed, out_name)
+                    ok = compress_audio(input_path, output_path)
+                    if ok and os.path.exists(output_path):
+                        compressed_size = os.path.getsize(output_path)
+                        total_compressed_size += compressed_size
+                        r = {"name": out_name, "original": filename, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"}
+                    else:
+                        r = {"name": filename, "original": filename, "original_size": original_size, "compressed_size": 0, "status": "error", "error": "ffmpeg failed"}
                 else:
-                    results.append({"name": original_name, "original": original_name, "original_size": original_size, "compressed_size": 0, "status": "error", "error": "ffmpeg failed"})
+                    r = {"name": filename, "original": filename, "original_size": original_size, "compressed_size": 0, "status": "unsupported"}
             except Exception as e:
-                results.append({"name": original_name, "original": original_name, "original_size": original_size, "compressed_size": 0, "status": "error", "error": str(e)})
-        elif ext in AUDIO_EXTS:
-            out_name = original_name.rsplit(".", 1)[0] + ".mp3" if "." in original_name else original_name + ".mp3"
-            output_path = os.path.join(session_compressed, out_name)
-            try:
-                ok = compress_audio(input_path, output_path)
-                if ok and os.path.exists(output_path):
-                    compressed_size = os.path.getsize(output_path)
-                    results.append({"name": out_name, "original": original_name, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"})
-                else:
-                    results.append({"name": original_name, "original": original_name, "original_size": original_size, "compressed_size": 0, "status": "error", "error": "ffmpeg failed"})
-            except Exception as e:
-                results.append({"name": original_name, "original": original_name, "original_size": original_size, "compressed_size": 0, "status": "error", "error": str(e)})
-        else:
-            results.append({"name": original_name, "original": original_name, "original_size": original_size, "compressed_size": 0, "status": "unsupported"})
-        os.remove(input_path)
-    return jsonify({"session_id": session_id, "results": results})
+                r = {"name": filename, "original": filename, "original_size": original_size, "compressed_size": 0, "status": "error", "error": str(e)}
+            results.append(r)
+            yield emit({"type": "file_done", "result": r, "total_compressed_size": total_compressed_size})
+            os.remove(input_path)
+
+        yield emit({"type": "done", "session_id": session_id, "results": results, "total_original_size": total_original_size, "total_compressed_size": total_compressed_size})
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
 @app.route("/download/<session_id>/<filename>")
 def download_file(session_id, filename):
