@@ -14,7 +14,8 @@ app = Flask(__name__)
 CORS(app, origins="*")
 app.config["UPLOAD_FOLDER"] = "uploads"
 app.config["COMPRESSED_FOLDER"] = "compressed"
-app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = None
+app.config["MAX_FORM_MEMORY_SIZE"] = None
 
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 os.makedirs(app.config["COMPRESSED_FOLDER"], exist_ok=True)
