@@ -7,6 +7,7 @@ const clearBtn = document.getElementById("clearBtn");
 const progress = document.getElementById("progress");
 const progressBar = document.getElementById("progressBar");
 const progressPct = document.getElementById("progressPct");
+const progressLog = document.getElementById("progressLog");
 const results = document.getElementById("results");
 const resultList = document.getElementById("resultList");
 const downloadAllBtn = document.getElementById("downloadAllBtn");
@@ -85,32 +86,92 @@ function setProgress(pct) {
   progressPct.textContent = pct + "%";
 }
 
+function addLog(msg, cls = "text-slate-400") {
+  const line = document.createElement("div");
+  line.className = `font-dm text-xs ${cls}`;
+  line.textContent = msg;
+  progressLog.appendChild(line);
+  progressLog.scrollTop = progressLog.scrollHeight;
+}
+
+function clearLog() { progressLog.innerHTML = ""; }
+
 compressBtn.addEventListener("click", async () => {
   if (!selectedFiles.length) return;
   compressBtn.disabled = true;
   compressBtn.textContent = "Compressing…";
   progress.classList.remove("hidden");
   results.classList.add("hidden");
-  setProgress(10);
+  clearLog();
+  setProgress(0);
+
+  const totalSize = selectedFiles.reduce((s, f) => s + f.size, 0);
+  addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} queued — ${fmtSize(totalSize)} total`);
+  addLog(`⬆ Uploading…`);
+
   const fd = new FormData();
   selectedFiles.forEach(f => fd.append("files", f));
-  let resp;
+  const uploadStart = Date.now();
+
   try {
-    const xhr = new XMLHttpRequest();
     const data = await new Promise((res, rej) => {
+      const xhr = new XMLHttpRequest();
       xhr.open("POST", "/compress");
-      xhr.upload.onprogress = e => { if (e.lengthComputable) setProgress(Math.round(10 + (e.loaded/e.total)*60)); };
-      xhr.onload = () => res(JSON.parse(xhr.responseText));
+      xhr.upload.onprogress = e => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((e.loaded / e.total) * 60);
+        setProgress(10 + pct);
+        const elapsed = (Date.now() - uploadStart) / 1000;
+        const rate = e.loaded / elapsed;
+        const remaining = rate > 0 ? (e.total - e.loaded) / rate : 0;
+        const etaStr = remaining > 60
+          ? `${Math.ceil(remaining / 60)}m ${Math.round(remaining % 60)}s`
+          : `${Math.ceil(remaining)}s`;
+        const logLines = progressLog.querySelectorAll("div");
+        const uploadLine = [...logLines].find(l => l.textContent.startsWith("⬆"));
+        const msg = `⬆ Uploading… ${fmtSize(e.loaded)} / ${fmtSize(e.total)} (${fmtSize(rate)}/s — ETA ${etaStr})`;
+        if (uploadLine) uploadLine.textContent = msg;
+      };
+      xhr.onload = () => {
+        const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
+        const logLines = progressLog.querySelectorAll("div");
+        const uploadLine = [...logLines].find(l => l.textContent.startsWith("⬆"));
+        if (uploadLine) uploadLine.textContent = `✓ Upload complete — ${fmtSize(totalSize)} in ${elapsed}s`;
+        res(JSON.parse(xhr.responseText));
+      };
       xhr.onerror = rej;
       xhr.send(fd);
     });
-    setProgress(90);
+
+    setProgress(75);
+    addLog(`⚙ Compressing ${data.results.length} file${data.results.length > 1 ? "s" : ""}…`);
+
+    let totalCompressed = 0;
+    let okCount = 0;
+    data.results.forEach(r => {
+      const t = getType(r.original || r.name);
+      if (r.status === "ok") {
+        totalCompressed += r.compressed_size || 0;
+        okCount++;
+        const saved = r.original_size && r.compressed_size ? Math.round((1 - r.compressed_size / r.original_size) * 100) : 0;
+        addLog(`  ✓ ${r.name}  ${fmtSize(r.original_size)} → ${fmtSize(r.compressed_size)}  (−${saved}%)`, "text-emerald-400");
+      } else if (r.status === "unsupported") {
+        addLog(`  ✗ ${r.original || r.name}  unsupported format`, "text-amber-500");
+      } else {
+        addLog(`  ✗ ${r.original || r.name}  error`, "text-red-400");
+      }
+    });
+
+    const totalSaved = totalSize - totalCompressed;
+    const pctSaved = totalSize > 0 && totalCompressed > 0 ? Math.round((totalSaved / totalSize) * 100) : 0;
+    if (okCount > 0) addLog(`📊 ${fmtSize(totalSize)} → ${fmtSize(totalCompressed)}  saved ${fmtSize(totalSaved)} (${pctSaved}%)`, "text-violet-400");
+
     sessionId = data.session_id;
     renderResults(data.results);
     setProgress(100);
-    setTimeout(() => { progress.classList.add("hidden"); setProgress(0); }, 600);
+    setTimeout(() => { progress.classList.add("hidden"); setProgress(0); }, 800);
   } catch(e) {
-    alert("Compression failed. Is the server running?");
+    addLog("✗ Compression failed. Is the server running?", "text-red-400");
     progress.classList.add("hidden");
   }
   compressBtn.disabled = false;
