@@ -1,6 +1,7 @@
 import os
 import shutil
 import socket
+import qrcode
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from PIL import Image
@@ -27,6 +28,12 @@ def get_local_ip():
         return "127.0.0.1"
     finally:
         s.close()
+
+def print_qr(url):
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    qr.print_ascii(invert=True)
 
 def compress_image(input_path, output_path, filename):
     ext = filename.rsplit(".", 1)[-1].lower()
@@ -165,6 +172,10 @@ def cleanup_session(session_id):
 
 if __name__ == "__main__":
     ip = get_local_ip()
+    network_url = f"http://{ip}:5000"
     print(f"\n  Local:   http://127.0.0.1:5000")
-    print(f"  Network: http://{ip}:5000\n")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    print(f"  Network: {network_url}\n")
+    print(f"  Scan to open on your phone:\n")
+    print_qr(network_url)
+    print()
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
