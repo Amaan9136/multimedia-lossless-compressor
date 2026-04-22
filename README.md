@@ -12,6 +12,49 @@ Compress images, videos, and audio files with minimal quality loss directly from
 - Mobile tip to delete originals after downloading
 - Accessible from any device on your local network
 
+## Compression Algorithms & Techniques
+
+### Images (Pillow)
+
+- **JPEG**
+  - DCT-based lossy compression
+  - Quality set to `72`
+  - Progressive encoding enabled
+
+- **PNG**
+  - Lossless compression using DEFLATE (zlib)
+  - `compress_level=9` (maximum compression)
+
+- **WebP**
+  - VP8-based lossy compression (Google)
+  - Quality set to `72`
+
+### Video (ffmpeg)
+
+- **H.264 (libx264)**
+  - CRF `28` (Constant Rate Factor)
+  - Perceptual quality-based encoding
+  - Balances quality vs file size efficiently
+
+- **Audio Track**
+  - AAC at `128 kbps`
+
+### Audio (ffmpeg)
+
+- **AAC / MP3**
+  - Bitrate: `128 kbps`
+  - Perceptual audio coding
+  - Removes frequencies less audible to humans
+
+### Notes
+
+- **Lossy formats:** JPEG, WebP, Video, and compressed Audio  
+  - These reduce file size by discarding non-critical data  
+  - Tuned to keep quality degradation *visually/audibly minimal*
+
+- **Lossless format:** PNG  
+  - Preserves exact original data with no quality loss
+
 ## Requirements
 
 - Python 3.8+

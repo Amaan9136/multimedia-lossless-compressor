@@ -1,4 +1,5 @@
 import os
+import shutil
 import socket
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
@@ -146,6 +147,21 @@ def download_all(session_id):
         for fname in os.listdir(folder):
             zf.write(os.path.join(folder, fname), fname)
     return send_file(zip_path, mimetype="application/zip", as_attachment=True, download_name="compressed_files.zip")
+
+@app.route("/cleanup/<session_id>", methods=["DELETE"])
+def cleanup_session(session_id):
+    folder = os.path.join(app.config["COMPRESSED_FOLDER"], session_id)
+    zip_path = os.path.join(app.config["COMPRESSED_FOLDER"], f"{session_id}.zip")
+    removed = []
+    if os.path.exists(folder):
+        shutil.rmtree(folder)
+        removed.append("files")
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+        removed.append("zip")
+    if not removed:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify({"ok": True, "removed": removed})
 
 if __name__ == "__main__":
     ip = get_local_ip()

@@ -10,6 +10,7 @@ const progressPct = document.getElementById("progressPct");
 const results = document.getElementById("results");
 const resultList = document.getElementById("resultList");
 const downloadAllBtn = document.getElementById("downloadAllBtn");
+const cleanupBtn = document.getElementById("cleanupBtn");
 const sumOriginal = document.getElementById("sumOriginal");
 const sumCompressed = document.getElementById("sumCompressed");
 const sumSaved = document.getElementById("sumSaved");
@@ -145,6 +146,21 @@ function renderResults(res) {
   const pct = totalOrig && totalComp ? Math.round((1 - totalComp/totalOrig)*100) : 0;
   sumSaved.textContent = totalComp ? `${fmtSize(totalOrig - totalComp)} (${pct}%)` : "—";
   downloadAllBtn.onclick = () => { window.location.href = `/download-all/${sessionId}`; };
+  cleanupBtn.onclick = async () => {
+    if (!confirm("Delete all compressed files from the server? This cannot be undone.")) return;
+    try {
+      const r = await fetch(`/cleanup/${sessionId}`, { method: "DELETE" });
+      const d = await r.json();
+      if (d.ok) {
+        cleanupBtn.textContent = "✓ Removed";
+        cleanupBtn.disabled = true;
+        cleanupBtn.className = "border border-slate-700 text-slate-600 font-syne font-semibold text-xs px-4 py-2 rounded-lg cursor-not-allowed";
+        downloadAllBtn.disabled = true;
+        downloadAllBtn.className = "bg-slate-800 text-slate-600 font-syne font-semibold text-xs px-4 py-2 rounded-lg cursor-not-allowed";
+        resultList.querySelectorAll("a").forEach(a => { a.removeAttribute("href"); a.className = a.className + " opacity-30 pointer-events-none"; });
+      }
+    } catch(e) { alert("Failed to remove files from server."); }
+  };
   if (isMobile()) document.getElementById("mobileDeleteHint").classList.remove("hidden");
   results.classList.remove("hidden");
 }
