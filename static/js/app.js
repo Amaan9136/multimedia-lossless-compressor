@@ -1,29 +1,28 @@
-const dropzone = document.getElementById("dropzone");
-const fileInput = document.getElementById("fileInput");
-const fileList = document.getElementById("fileList");
-const actions = document.getElementById("actions");
-const compressBtn = document.getElementById("compressBtn");
-const clearBtn = document.getElementById("clearBtn");
-const progress = document.getElementById("progress");
-const progressBar = document.getElementById("progressBar");
-const progressPct = document.getElementById("progressPct");
-const progressLog = document.getElementById("progressLog");
-const results = document.getElementById("results");
-const resultList = document.getElementById("resultList");
-const downloadAllBtn = document.getElementById("downloadAllBtn");
-const cleanupBtn = document.getElementById("cleanupBtn");
-const sumOriginal = document.getElementById("sumOriginal");
-const sumCompressed = document.getElementById("sumCompressed");
-const sumSaved = document.getElementById("sumSaved");
-
-let selectedFiles = [];
-let sessionId = null;
-
+const CHUNK_SIZE   = 4 * 1024 * 1024;
+const MAX_PARALLEL = 6;
 const IMAGE_EXTS = ["jpg","jpeg","png","webp","bmp","tiff","gif"];
 const VIDEO_EXTS = ["mp4","mov","avi","mkv","webm","flv","wmv","m4v"];
 const AUDIO_EXTS = ["mp3","wav","flac","aac","ogg","m4a","wma"];
-
-function getExt(name) { return name.split(".").pop().toLowerCase(); }
+const dropzone       = document.getElementById("dropzone");
+const fileInput      = document.getElementById("fileInput");
+const fileList       = document.getElementById("fileList");
+const actions        = document.getElementById("actions");
+const compressBtn    = document.getElementById("compressBtn");
+const clearBtn       = document.getElementById("clearBtn");
+const progress       = document.getElementById("progress");
+const progressBar    = document.getElementById("progressBar");
+const progressPct    = document.getElementById("progressPct");
+const progressLog    = document.getElementById("progressLog");
+const results        = document.getElementById("results");
+const resultList     = document.getElementById("resultList");
+const downloadAllBtn = document.getElementById("downloadAllBtn");
+const cleanupBtn     = document.getElementById("cleanupBtn");
+const sumOriginal    = document.getElementById("sumOriginal");
+const sumCompressed  = document.getElementById("sumCompressed");
+const sumSaved       = document.getElementById("sumSaved");
+let selectedFiles = [];
+let sessionId     = null;
+function getExt(name)  { return name.split(".").pop().toLowerCase(); }
 function getType(name) {
   const e = getExt(name);
   if (IMAGE_EXTS.includes(e)) return "img";
@@ -31,8 +30,8 @@ function getType(name) {
   if (AUDIO_EXTS.includes(e)) return "aud";
   return "unk";
 }
-function pillClass(t) { return {img:"pill-img",vid:"pill-vid",aud:"pill-aud",unk:"pill-unk"}[t]; }
-function pillLabel(t) { return {img:"Image",vid:"Video",aud:"Audio",unk:"Unknown"}[t]; }
+const PILL_CLS   = {img:"pill-img", vid:"pill-vid", aud:"pill-aud", unk:"pill-unk"};
+const PILL_LABEL = {img:"Image",    vid:"Video",    aud:"Audio",    unk:"Unknown"};
 function fmtSize(b) {
   if (b >= 1e9) return (b/1e9).toFixed(2) + " GB";
   if (b >= 1e6) return (b/1e6).toFixed(2) + " MB";
@@ -40,29 +39,33 @@ function fmtSize(b) {
   return b + " B";
 }
 function isMobile() { return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent); }
-
+function uid()      { return crypto.randomUUID(); }
+function ts()       { return new Date().toISOString().slice(11, 23); }
 function renderFileList() {
   fileList.innerHTML = "";
-  if (!selectedFiles.length) { fileList.classList.add("hidden"); actions.classList.add("hidden"); return; }
+  if (!selectedFiles.length) {
+    fileList.classList.add("hidden");
+    actions.classList.add("hidden");
+    return;
+  }
   fileList.classList.remove("hidden");
   actions.classList.remove("hidden");
   selectedFiles.forEach((f, i) => {
-    const t = getType(f.name);
+    const t   = getType(f.name);
     const div = document.createElement("div");
     div.className = "file-item flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3";
     div.innerHTML = `
-      <span class="pill ${pillClass(t)}">${pillLabel(t)}</span>
+      <span class="pill ${PILL_CLS[t]}">${PILL_LABEL[t]}</span>
       <span class="flex-1 text-sm font-dm text-slate-200 truncate">${f.name}</span>
       <span class="text-xs text-slate-500 font-dm shrink-0">${fmtSize(f.size)}</span>
       <button data-i="${i}" class="remove-btn text-slate-600 hover:text-red-400 text-lg leading-none transition-colors ml-1">×</button>
     `;
     fileList.appendChild(div);
   });
-  fileList.querySelectorAll(".remove-btn").forEach(btn => {
-    btn.addEventListener("click", () => { selectedFiles.splice(Number(btn.dataset.i), 1); renderFileList(); });
-  });
+  fileList.querySelectorAll(".remove-btn").forEach(btn =>
+    btn.addEventListener("click", () => { selectedFiles.splice(+btn.dataset.i, 1); renderFileList(); })
+  );
 }
-
 function addFiles(newFiles) {
   Array.from(newFiles).forEach(f => {
     if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) selectedFiles.push(f);
@@ -70,126 +73,146 @@ function addFiles(newFiles) {
   renderFileList();
   results.classList.add("hidden");
 }
-
-dropzone.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", e => addFiles(e.target.files));
-dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag-over"); });
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
-dropzone.addEventListener("drop", e => { e.preventDefault(); dropzone.classList.remove("drag-over"); addFiles(e.dataTransfer.files); });
-clearBtn.addEventListener("click", () => { selectedFiles = []; fileInput.value = ""; renderFileList(); results.classList.add("hidden"); });
-
+dropzone.addEventListener("click",    () => fileInput.click());
+fileInput.addEventListener("change",  e  => addFiles(e.target.files));
+dropzone.addEventListener("dragover", e  => { e.preventDefault(); dropzone.classList.add("drag-over"); });
+dropzone.addEventListener("dragleave",()  => dropzone.classList.remove("drag-over"));
+dropzone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropzone.classList.remove("drag-over");
+  addFiles(e.dataTransfer.files);
+});
+clearBtn.addEventListener("click", () => {
+  selectedFiles = [];
+  fileInput.value = "";
+  renderFileList();
+  results.classList.add("hidden");
+});
 function setProgress(pct) {
   progressBar.style.width = pct + "%";
-  progressPct.textContent = pct + "%";
+  progressPct.textContent = Math.round(pct) + "%";
 }
-
-function addLog(msg, cls = "text-slate-400") {
+const LOG_COLOR = {info:"text-slate-300", ok:"text-emerald-400", warn:"text-amber-400", error:"text-red-400", debug:"text-slate-500"};
+function addLog(msg, level = "info") {
   const line = document.createElement("div");
-  line.className = `font-dm text-xs ${cls}`;
-  line.textContent = msg;
+  line.className = `font-mono text-xs ${LOG_COLOR[level] || "text-slate-400"} whitespace-pre-wrap break-all`;
+  line.textContent = `[${ts()}] ${msg}`;
   progressLog.appendChild(line);
   progressLog.scrollTop = progressLog.scrollHeight;
   return line;
 }
-
 function clearLog() { progressLog.innerHTML = ""; }
-
+async function uploadFile(file, onProgress) {
+  const fileId      = uid();
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
+  let   uploaded    = 0;
+  const chunks      = Array.from({length: totalChunks}, (_, i) => ({
+    index: i,
+    blob: file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size)),
+  }));
+  async function uploadChunk(chunk) {
+    const resp = await fetch("/upload-chunk", {
+      method: "POST",
+      headers: {
+        "X-File-Id":      fileId,
+        "X-Chunk-Index":  String(chunk.index),
+        "X-Total-Chunks": String(totalChunks),
+        "X-File-Name":    file.name,
+        "Content-Type":   "application/octet-stream",
+      },
+      body: chunk.blob,
+    });
+    if (!resp.ok) throw new Error(`Chunk ${chunk.index} failed: ${resp.status}`);
+    uploaded += chunk.blob.size;
+    onProgress(uploaded, file.size);
+    return resp.json();
+  }
+  const queue = [...chunks];
+  async function worker() {
+    while (queue.length) {
+      const chunk = queue.shift();
+      if (chunk) await uploadChunk(chunk);
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(MAX_PARALLEL, totalChunks)}, worker));
+  return fileId;
+}
 compressBtn.addEventListener("click", async () => {
   if (!selectedFiles.length) return;
-  compressBtn.disabled = true;
-  compressBtn.textContent = "Compressing…";
+  compressBtn.disabled    = true;
+  compressBtn.textContent = "Uploading…";
   progress.classList.remove("hidden");
   results.classList.add("hidden");
   clearLog();
   setProgress(0);
-
-  const totalSize = selectedFiles.reduce((s, f) => s + f.size, 0);
-  const fd = new FormData();
-  selectedFiles.forEach(f => fd.append("files", f));
-
+  const totalSize    = selectedFiles.reduce((s, f) => s + f.size, 0);
+  const uploadSession = uid();
+  const fileManifest  = [];
+  let   uploadedBytes = 0;
+  const uploadStart   = Date.now();
   addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} — ${fmtSize(totalSize)} total`);
-  const uploadLine = addLog(`⬆ Uploading to local network…`);
-  const uploadStart = Date.now();
-
+  const uploadLine = addLog("⬆  Uploading… 0%");
   try {
-    const resp = await new Promise((res, rej) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/compress");
-      xhr.responseType = "text";
-      xhr.upload.onprogress = e => {
-        if (!e.lengthComputable) return;
-        const pct = Math.round((e.loaded / e.total) * 40);
-        setProgress(pct);
+    for (let fi = 0; fi < selectedFiles.length; fi++) {
+      const file = selectedFiles[fi];
+      addLog(`  → [${fi+1}/${selectedFiles.length}] ${file.name}  (${fmtSize(file.size)})`);
+      const fileId = await uploadFile(file, (loaded) => {
+        const globalLoaded = uploadedBytes + loaded;
+        setProgress((globalLoaded / totalSize) * 40);
         const elapsed = (Date.now() - uploadStart) / 1000 || 0.001;
-        const rate = e.loaded / elapsed;
-        const remaining = rate > 0 ? (e.total - e.loaded) / rate : 0;
-        const eta = remaining > 60 ? `${Math.ceil(remaining/60)}m ${Math.round(remaining%60)}s` : `${Math.ceil(remaining)}s`;
-        uploadLine.textContent = `⬆ Uploading… ${fmtSize(e.loaded)} / ${fmtSize(e.total)}  ${fmtSize(rate)}/s  ETA ${eta}`;
-      };
-      xhr.onload = () => {
-        const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
-        const rate = fmtSize(totalSize / (parseFloat(elapsed) || 1));
-        uploadLine.textContent = `✓ Upload done — ${fmtSize(totalSize)} in ${elapsed}s  (${rate}/s)`;
-        res(xhr.responseText);
-      };
-      xhr.onerror = rej;
-      xhr.send(fd);
+        const rate    = globalLoaded / elapsed;
+        const rem     = rate > 0 ? (totalSize - globalLoaded) / rate : 0;
+        const eta     = rem > 60 ? `${Math.ceil(rem/60)}m ${Math.round(rem%60)}s` : `${Math.ceil(rem)}s`;
+        uploadLine.textContent = `[${ts()}] ⬆  Uploading ${fmtSize(globalLoaded)} / ${fmtSize(totalSize)}  ${fmtSize(rate)}/s  ETA ${eta}`;
+      });
+      fileManifest.push({file_id: fileId, name: file.name});
+      uploadedBytes += file.size;
+    }
+    const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
+    uploadLine.textContent = `[${ts()}] ✓ Upload done — ${fmtSize(totalSize)} in ${elapsed}s  (${fmtSize(totalSize / (parseFloat(elapsed) || 1))}/s)`;
+    setProgress(40);
+    compressBtn.textContent = "Compressing…";
+    const compResp = await fetch("/compress", {
+      method:  "POST",
+      headers: {"Content-Type": "application/json"},
+      body:    JSON.stringify({session_id: uploadSession, files: fileManifest}),
     });
-
-    setProgress(45);
-
-    const lines = resp.trim().split("\n").filter(Boolean);
-    let allResults = [];
-    let totalOriginalSize = 0;
-    let totalCompressedSize = 0;
-    let totalFiles = 0;
-
-    for (const line of lines) {
-      let msg;
-      try { msg = JSON.parse(line); } catch { continue; }
-
-      if (msg.type === "start") {
-        totalOriginalSize = msg.total_original_size;
-        totalFiles = msg.total_files;
-        addLog(`⚙ Compressing ${totalFiles} file${totalFiles > 1 ? "s" : ""}  —  ${fmtSize(totalOriginalSize)} total`, "text-slate-400");
-      } else if (msg.type === "progress") {
-        const pct = 45 + Math.round(((msg.index) / totalFiles) * 50);
-        setProgress(pct);
-        addLog(`  ⟳ [${msg.index + 1}/${totalFiles}] ${msg.file}  ${fmtSize(msg.original_size)}`, "text-slate-500");
-      } else if (msg.type === "file_done") {
-        const r = msg.result;
-        totalCompressedSize = msg.total_compressed_size;
-        if (r.status === "ok") {
-          const saved = r.original_size && r.compressed_size ? Math.round((1 - r.compressed_size / r.original_size) * 100) : 0;
-          addLog(`  ✓ ${r.name}  ${fmtSize(r.original_size)} → ${fmtSize(r.compressed_size)}  (−${saved}%)`, "text-emerald-400");
-        } else if (r.status === "unsupported") {
-          addLog(`  ✗ ${r.original || r.name}  unsupported format`, "text-amber-500");
-        } else {
-          addLog(`  ✗ ${r.original || r.name}  error: ${r.error || "unknown"}`, "text-red-400");
+    const reader  = compResp.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf        = "";
+    let   allResults = [];
+    let   totalFiles = 1;
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.type === "log") { addLog(msg.msg, msg.level || "info"); continue; }
+        if (msg.type === "start") {
+          totalFiles = msg.total_files;
+          sessionId  = msg.session_id;
+        } else if (msg.type === "progress") {
+          setProgress(40 + (msg.index / totalFiles) * 55);
+        } else if (msg.type === "done") {
+          allResults = msg.results;
+          sessionId  = msg.session_id;
         }
-      } else if (msg.type === "done") {
-        allResults = msg.results;
-        sessionId = msg.session_id;
-        totalOriginalSize = msg.total_original_size;
-        totalCompressedSize = msg.total_compressed_size;
-        const saved = totalOriginalSize - totalCompressedSize;
-        const pct = totalOriginalSize > 0 && totalCompressedSize > 0 ? Math.round((saved / totalOriginalSize) * 100) : 0;
-        const okCount = allResults.filter(r => r.status === "ok").length;
-        if (okCount > 0) addLog(`📊 ${fmtSize(totalOriginalSize)} → ${fmtSize(totalCompressedSize)}  saved ${fmtSize(saved)} (${pct}%)  across ${okCount} file${okCount > 1 ? "s" : ""}`, "text-violet-400");
       }
     }
-
     renderResults(allResults);
     setProgress(100);
-    setTimeout(() => { progress.classList.add("hidden"); setProgress(0); }, 800);
-  } catch(e) {
-    addLog("✗ Compression failed. Is the server running?", "text-red-400");
-    progress.classList.add("hidden");
+    setTimeout(() => { progress.classList.add("hidden"); setProgress(0); }, 1000);
+  } catch (err) {
+    addLog(`✗ Failed: ${err.message}`, "error");
   }
-  compressBtn.disabled = false;
+  compressBtn.disabled    = false;
   compressBtn.textContent = "Compress Files";
 });
-
 function renderResults(res) {
   resultList.innerHTML = "";
   let totalOrig = 0, totalComp = 0;
@@ -197,42 +220,40 @@ function renderResults(res) {
     totalOrig += r.original_size || 0;
     if (r.status === "ok") totalComp += r.compressed_size || 0;
     const saved = r.original_size && r.compressed_size ? Math.round((1 - r.compressed_size/r.original_size)*100) : 0;
-    const ok = r.status === "ok";
-    const t = getType(r.original || r.name);
+    const ok  = r.status === "ok";
+    const t   = getType(r.original || r.name);
     const div = document.createElement("div");
     div.className = "result-item flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3";
-    div.innerHTML = ok ? `
-      <span class="pill ${pillClass(t)}">${pillLabel(t)}</span>
-      <span class="flex-1 text-sm font-dm text-slate-200 truncate">${r.name}</span>
-      <span class="text-xs text-slate-500 font-dm shrink-0">${fmtSize(r.original_size)} → ${fmtSize(r.compressed_size)}</span>
-      <span class="text-xs font-syne font-bold text-emerald-400 shrink-0">−${saved}%</span>
-      <a href="/download/${sessionId}/${encodeURIComponent(r.name)}" download="${r.name}" class="shrink-0 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-syne font-semibold px-3 py-1.5 rounded-lg transition-all">↓</a>
-    ` : `
-      <span class="pill ${pillClass(t)}">${pillLabel(t)}</span>
-      <span class="flex-1 text-sm font-dm text-slate-400 truncate">${r.original || r.name}</span>
-      <span class="text-xs text-red-400 font-dm">${r.status === "unsupported" ? "Unsupported" : "Error"}</span>
-    `;
+    div.innerHTML = ok
+      ? `<span class="pill ${PILL_CLS[t]}">${PILL_LABEL[t]}</span>
+         <span class="flex-1 text-sm font-dm text-slate-200 truncate">${r.name}</span>
+         <span class="text-xs text-slate-500 font-dm shrink-0">${fmtSize(r.original_size)} → ${fmtSize(r.compressed_size)}</span>
+         <span class="text-xs font-syne font-bold text-emerald-400 shrink-0">−${saved}%</span>
+         <a href="/download/${sessionId}/${encodeURIComponent(r.name)}" download="${r.name}"
+            class="shrink-0 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-syne font-semibold px-3 py-1.5 rounded-lg transition-all">↓</a>`
+      : `<span class="pill ${PILL_CLS[t]}">${PILL_LABEL[t]}</span>
+         <span class="flex-1 text-sm font-dm text-slate-400 truncate">${r.original || r.name}</span>
+         <span class="text-xs text-red-400 font-dm">${r.status === "unsupported" ? "Unsupported" : "Error"}</span>`;
     resultList.appendChild(div);
   });
-  sumOriginal.textContent = fmtSize(totalOrig);
+  sumOriginal.textContent   = fmtSize(totalOrig);
   sumCompressed.textContent = totalComp ? fmtSize(totalComp) : "—";
   const pct = totalOrig && totalComp ? Math.round((1 - totalComp/totalOrig)*100) : 0;
-  sumSaved.textContent = totalComp ? `${fmtSize(totalOrig - totalComp)} (${pct}%)` : "—";
-  downloadAllBtn.onclick = () => { window.location.href = `/download-all/${sessionId}`; };
+  sumSaved.textContent      = totalComp ? `${fmtSize(totalOrig - totalComp)} (${pct}%)` : "—";
+  downloadAllBtn.onclick    = () => { window.location.href = `/download-all/${sessionId}`; };
   cleanupBtn.onclick = async () => {
     if (!confirm("Delete all compressed files from the server? This cannot be undone.")) return;
     try {
-      const r = await fetch(`/cleanup/${sessionId}`, { method: "DELETE" });
-      const d = await r.json();
+      const d = await (await fetch(`/cleanup/${sessionId}`, {method: "DELETE"})).json();
       if (d.ok) {
-        cleanupBtn.textContent = "✓ Removed";
-        cleanupBtn.disabled = true;
-        cleanupBtn.className = "border border-slate-700 text-slate-600 font-syne font-semibold text-xs px-4 py-2 rounded-lg cursor-not-allowed";
-        downloadAllBtn.disabled = true;
+        cleanupBtn.textContent   = "✓ Removed";
+        cleanupBtn.disabled      = true;
+        cleanupBtn.className     = "border border-slate-700 text-slate-600 font-syne font-semibold text-xs px-4 py-2 rounded-lg cursor-not-allowed";
+        downloadAllBtn.disabled  = true;
         downloadAllBtn.className = "bg-slate-800 text-slate-600 font-syne font-semibold text-xs px-4 py-2 rounded-lg cursor-not-allowed";
-        resultList.querySelectorAll("a").forEach(a => { a.removeAttribute("href"); a.className = a.className + " opacity-30 pointer-events-none"; });
+        resultList.querySelectorAll("a").forEach(a => { a.removeAttribute("href"); a.className += " opacity-30 pointer-events-none"; });
       }
-    } catch(e) { alert("Failed to remove files from server."); }
+    } catch { alert("Failed to remove files from server."); }
   };
   if (isMobile()) document.getElementById("mobileDeleteHint").classList.remove("hidden");
   results.classList.remove("hidden");

@@ -6,7 +6,7 @@
 <title>Squish — Media Compressor</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body class="min-h-screen bg-[#0a0a0f] text-white">
@@ -16,9 +16,8 @@
       <span class="text-3xl">⚡</span>
       <h1 class="text-4xl font-extrabold tracking-tight font-syne text-white">Squish</h1>
     </div>
-    <p class="text-slate-400 font-dm text-sm">Compress images, videos & audio — lossless quality, massive size reduction</p>
+    <p class="text-slate-400 font-dm text-sm">Compress images, videos &amp; audio — lossless quality, massive size reduction</p>
   </header>
-
   <div id="dropzone" class="drop-zone rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900/50 p-10 text-center cursor-pointer transition-all hover:border-violet-500 hover:bg-slate-900 mb-6">
     <div class="pointer-events-none">
       <div class="text-5xl mb-3">📦</div>
@@ -28,9 +27,7 @@
     </div>
     <input type="file" id="fileInput" multiple accept="image/*,video/*,audio/*" class="hidden">
   </div>
-
   <div id="fileList" class="space-y-2 mb-6 hidden"></div>
-
   <div id="actions" class="hidden flex gap-3 mb-8">
     <button id="compressBtn" class="flex-1 bg-violet-600 hover:bg-violet-500 active:scale-95 text-white font-syne font-bold py-3.5 rounded-xl transition-all text-sm tracking-wide">
       Compress Files
@@ -39,18 +36,27 @@
       Clear
     </button>
   </div>
-
   <div id="progress" class="hidden mb-6">
     <div class="flex justify-between text-xs text-slate-400 font-dm mb-2">
-      <span>Compressing...</span>
+      <span id="progressLabel">Uploading…</span>
       <span id="progressPct">0%</span>
     </div>
     <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden mb-3">
-      <div id="progressBar" class="h-full bg-violet-500 rounded-full transition-all duration-300" style="width:0%"></div>
+      <div id="progressBar" class="h-full bg-violet-500 rounded-full transition-all duration-200" style="width:0%"></div>
     </div>
-    <div id="progressLog" class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 space-y-1 max-h-40 overflow-y-auto"></div>
+    <div class="rounded-xl border border-slate-800 overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-2 bg-slate-900/80 border-b border-slate-800">
+        <span class="text-[10px] font-syne font-bold tracking-widest text-slate-500 uppercase">Live Log</span>
+        <button id="copyLogBtn"
+          class="text-[10px] font-syne text-slate-600 hover:text-slate-300 transition-colors px-2 py-0.5 rounded border border-slate-700 hover:border-slate-500">
+          Copy
+        </button>
+      </div>
+      <div id="progressLog"
+        class="bg-[#0d0d14] px-4 py-3 space-y-0.5 max-h-64 overflow-y-auto font-mono text-xs leading-5">
+      </div>
+    </div>
   </div>
-
   <div id="results" class="hidden">
     <div class="flex items-center justify-between mb-4">
       <h2 class="font-syne font-bold text-lg">Results</h2>
@@ -65,9 +71,9 @@
     </div>
     <div id="resultList" class="space-y-2 mb-5"></div>
     <div id="summary" class="rounded-xl bg-slate-900 border border-slate-800 px-5 py-4 flex flex-wrap gap-4 text-sm font-dm mb-5">
-      <div><span class="text-slate-500">Original</span> <span id="sumOriginal" class="text-white font-medium ml-1"></span></div>
+      <div><span class="text-slate-500">Original</span>   <span id="sumOriginal"   class="text-white font-medium ml-1"></span></div>
       <div><span class="text-slate-500">Compressed</span> <span id="sumCompressed" class="text-white font-medium ml-1"></span></div>
-      <div><span class="text-slate-500">Saved</span> <span id="sumSaved" class="text-emerald-400 font-bold ml-1"></span></div>
+      <div><span class="text-slate-500">Saved</span>      <span id="sumSaved"      class="text-emerald-400 font-bold ml-1"></span></div>
     </div>
     <div id="mobileDeleteHint" class="rounded-xl bg-amber-950/40 border border-amber-800/40 px-5 py-4 text-xs text-amber-300 font-dm hidden">
       <strong class="font-semibold">Tip:</strong> To free up space, go to your Photos or Files app and delete the originals after downloading the compressed versions.
@@ -75,5 +81,16 @@
   </div>
 </div>
 <script src="/static/js/app.js"></script>
+<script>
+  document.getElementById("copyLogBtn").addEventListener("click", () => {
+    const lines = [...document.getElementById("progressLog").querySelectorAll("div")]
+      .map(d => d.textContent).join("\n");
+    navigator.clipboard.writeText(lines).then(() => {
+      const btn = document.getElementById("copyLogBtn");
+      btn.textContent = "Copied!";
+      setTimeout(() => btn.textContent = "Copy", 1500);
+    });
+  });
+</script>
 </body>
 </html>
