@@ -1,15 +1,16 @@
-import os, shutil, socket, json, uuid, mimetypes, subprocess, zipfile, threading
+import os, shutil, socket, json, uuid, mimetypes, subprocess, zipfile, threading, time
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from flask_cors import CORS
 from PIL import Image
 from werkzeug.serving import WSGIRequestHandler
-WSGIRequestHandler.timeout = 0
+WSGIRequestHandler.protocol_version = "HTTP/1.1"
 app = Flask(__name__)
 CORS(app, origins="*")
 app.config["UPLOAD_FOLDER"]        = "uploads"
 app.config["COMPRESSED_FOLDER"]    = "compressed"
 app.config["MAX_CONTENT_LENGTH"]   = None
 app.config["MAX_FORM_MEMORY_SIZE"] = None
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 os.makedirs(app.config["UPLOAD_FOLDER"],     exist_ok=True)
 os.makedirs(app.config["COMPRESSED_FOLDER"], exist_ok=True)
 def get_local_ip():
@@ -81,6 +82,12 @@ def read_stream(path, chunk_size=1 << 17):
             chunk = f.read(chunk_size)
             if not chunk: break
             yield chunk
+@app.after_request
+def no_cache(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"]        = "no-cache"
+    response.headers["Expires"]       = "0"
+    return response
 @app.route("/upload-chunk", methods=["POST"])
 def upload_chunk():
     file_id      = request.headers.get("X-File-Id")
@@ -178,7 +185,7 @@ def compress():
         yield emit({"type": "log", "level": "ok", "msg": f"📊 Done — {fmt_size(total_original_size)} → {fmt_size(total_compressed_size)}  saved {fmt_size(total_saved)} ({pct}%)"})
         yield emit({"type": "done", "session_id": session_id, "results": results, "total_original_size": total_original_size, "total_compressed_size": total_compressed_size})
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson",
-                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache", "Transfer-Encoding": "chunked"})
 @app.route("/download/<session_id>/<filename>")
 def download_file(session_id, filename):
     path = os.path.join(app.config["COMPRESSED_FOLDER"], session_id, filename)
@@ -254,4 +261,4 @@ if __name__ == "__main__":
     print("  Scan to open on your phone:\n")
     print_qr(f"http://{ip}:5000")
     print()
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False, threaded=True)
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)

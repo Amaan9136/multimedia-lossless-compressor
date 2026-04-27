@@ -1,5 +1,5 @@
-const CHUNK_SIZE   = 4 * 1024 * 1024;
-const MAX_PARALLEL = 6;
+const CHUNK_SIZE   = 2 * 1024 * 1024;
+const MAX_PARALLEL = 8;
 const IMAGE_EXTS = ["jpg","jpeg","png","webp","bmp","tiff","gif"];
 const VIDEO_EXTS = ["mp4","mov","avi","mkv","webm","flv","wmv","m4v"];
 const AUDIO_EXTS = ["mp3","wav","flac","aac","ogg","m4a","wma"];
@@ -105,8 +105,8 @@ function clearLog() { progressLog.innerHTML = ""; }
 async function uploadFile(file, onProgress) {
   const fileId      = uid();
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
-  let   uploaded    = 0;
-  const chunks      = Array.from({length: totalChunks}, (_, i) => ({
+  const bytesPerChunk = new Array(totalChunks).fill(0);
+  const chunks = Array.from({length: totalChunks}, (_, i) => ({
     index: i,
     blob: file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size)),
   }));
@@ -123,8 +123,8 @@ async function uploadFile(file, onProgress) {
       body: chunk.blob,
     });
     if (!resp.ok) throw new Error(`Chunk ${chunk.index} failed: ${resp.status}`);
-    uploaded += chunk.blob.size;
-    onProgress(uploaded, file.size);
+    bytesPerChunk[chunk.index] = chunk.blob.size;
+    onProgress(bytesPerChunk.reduce((a, b) => a + b, 0), file.size);
     return resp.json();
   }
   const queue = [...chunks];
@@ -145,38 +145,38 @@ compressBtn.addEventListener("click", async () => {
   results.classList.add("hidden");
   clearLog();
   setProgress(0);
-  const totalSize    = selectedFiles.reduce((s, f) => s + f.size, 0);
+  const totalSize     = selectedFiles.reduce((s, f) => s + f.size, 0);
   const uploadSession = uid();
   const fileManifest  = [];
-  let   uploadedBytes = 0;
   const uploadStart   = Date.now();
+  const bytesLoaded   = new Array(selectedFiles.length).fill(0);
   addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} — ${fmtSize(totalSize)} total`);
-  const uploadLine = addLog("⬆  Uploading… 0%");
+  const uploadLine = addLog("⬆  Starting upload…");
   try {
-    for (let fi = 0; fi < selectedFiles.length; fi++) {
-      const file = selectedFiles[fi];
+    await Promise.all(selectedFiles.map((file, fi) => {
       addLog(`  → [${fi+1}/${selectedFiles.length}] ${file.name}  (${fmtSize(file.size)})`);
-      const fileId = await uploadFile(file, (loaded) => {
-        const globalLoaded = uploadedBytes + loaded;
+      return uploadFile(file, (loaded) => {
+        bytesLoaded[fi] = loaded;
+        const globalLoaded = bytesLoaded.reduce((a, b) => a + b, 0);
         setProgress((globalLoaded / totalSize) * 40);
         const elapsed = (Date.now() - uploadStart) / 1000 || 0.001;
         const rate    = globalLoaded / elapsed;
         const rem     = rate > 0 ? (totalSize - globalLoaded) / rate : 0;
         const eta     = rem > 60 ? `${Math.ceil(rem/60)}m ${Math.round(rem%60)}s` : `${Math.ceil(rem)}s`;
         uploadLine.textContent = `[${ts()}] ⬆  Uploading ${fmtSize(globalLoaded)} / ${fmtSize(totalSize)}  ${fmtSize(rate)}/s  ETA ${eta}`;
-      });
-      fileManifest.push({file_id: fileId, name: file.name});
-      uploadedBytes += file.size;
-    }
+      }).then(fileId => { fileManifest.push({file_id: fileId, name: file.name}); });
+    }));
     const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
     uploadLine.textContent = `[${ts()}] ✓ Upload done — ${fmtSize(totalSize)} in ${elapsed}s  (${fmtSize(totalSize / (parseFloat(elapsed) || 1))}/s)`;
     setProgress(40);
     compressBtn.textContent = "Compressing…";
+    addLog("🗜  Starting compression…");
     const compResp = await fetch("/compress", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
       body:    JSON.stringify({session_id: uploadSession, files: fileManifest}),
     });
+    if (!compResp.ok) throw new Error(`Compress request failed: ${compResp.status}`);
     const reader  = compResp.body.getReader();
     const decoder = new TextDecoder();
     let   buf        = "";
