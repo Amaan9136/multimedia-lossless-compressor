@@ -1,5 +1,5 @@
-const CHUNK_SIZE   = 2 * 1024 * 1024;
-const MAX_PARALLEL = 8;
+const CHUNK_SIZE   = 4 * 1024 * 1024;
+const MAX_PARALLEL = 4;
 const IMAGE_EXTS = ["jpg","jpeg","png","webp","bmp","tiff","gif"];
 const VIDEO_EXTS = ["mp4","mov","avi","mkv","webm","flv","wmv","m4v"];
 const AUDIO_EXTS = ["mp3","wav","flac","aac","ogg","m4a","wma"];
@@ -98,17 +98,17 @@ function addLog(msg, level = "info") {
   line.className = `font-mono text-xs ${LOG_COLOR[level] || "text-slate-400"} whitespace-pre-wrap break-all`;
   line.textContent = `[${ts()}] ${msg}`;
   progressLog.appendChild(line);
-  progressLog.scrollTop = progressLog.scrollHeight;
+  requestAnimationFrame(() => { progressLog.scrollTop = progressLog.scrollHeight; });
   return line;
 }
 function clearLog() { progressLog.innerHTML = ""; }
 async function uploadFile(file, onProgress) {
-  const fileId      = uid();
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
+  const fileId        = uid();
+  const totalChunks   = Math.ceil(file.size / CHUNK_SIZE) || 1;
   const bytesPerChunk = new Array(totalChunks).fill(0);
   const chunks = Array.from({length: totalChunks}, (_, i) => ({
     index: i,
-    blob: file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size)),
+    blob:  file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size)),
   }));
   async function uploadChunk(chunk) {
     const resp = await fetch("/upload-chunk", {
@@ -117,7 +117,7 @@ async function uploadFile(file, onProgress) {
         "X-File-Id":      fileId,
         "X-Chunk-Index":  String(chunk.index),
         "X-Total-Chunks": String(totalChunks),
-        "X-File-Name":    file.name,
+        "X-File-Name":    encodeURIComponent(file.name),
         "Content-Type":   "application/octet-stream",
       },
       body: chunk.blob,
@@ -148,24 +148,29 @@ compressBtn.addEventListener("click", async () => {
   const totalSize     = selectedFiles.reduce((s, f) => s + f.size, 0);
   const uploadSession = uid();
   const fileManifest  = [];
-  const uploadStart   = Date.now();
-  const bytesLoaded   = new Array(selectedFiles.length).fill(0);
   addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} — ${fmtSize(totalSize)} total`);
-  const uploadLine = addLog("⬆  Starting upload…");
+  let globalLoaded  = 0;
+  const uploadStart = Date.now();
+  const uploadLine  = addLog("⬆  Starting upload…");
   try {
-    await Promise.all(selectedFiles.map((file, fi) => {
+    for (let fi = 0; fi < selectedFiles.length; fi++) {
+      const file = selectedFiles[fi];
       addLog(`  → [${fi+1}/${selectedFiles.length}] ${file.name}  (${fmtSize(file.size)})`);
-      return uploadFile(file, (loaded) => {
-        bytesLoaded[fi] = loaded;
-        const globalLoaded = bytesLoaded.reduce((a, b) => a + b, 0);
+      let filePrev = 0;
+      const fileId = await uploadFile(file, (loaded) => {
+        const delta   = loaded - filePrev;
+        filePrev      = loaded;
+        globalLoaded += delta;
         setProgress((globalLoaded / totalSize) * 40);
         const elapsed = (Date.now() - uploadStart) / 1000 || 0.001;
         const rate    = globalLoaded / elapsed;
         const rem     = rate > 0 ? (totalSize - globalLoaded) / rate : 0;
         const eta     = rem > 60 ? `${Math.ceil(rem/60)}m ${Math.round(rem%60)}s` : `${Math.ceil(rem)}s`;
         uploadLine.textContent = `[${ts()}] ⬆  Uploading ${fmtSize(globalLoaded)} / ${fmtSize(totalSize)}  ${fmtSize(rate)}/s  ETA ${eta}`;
-      }).then(fileId => { fileManifest.push({file_id: fileId, name: file.name}); });
-    }));
+      });
+      fileManifest.push({file_id: fileId, name: file.name});
+      addLog(`  ✓ [${fi+1}/${selectedFiles.length}] ${file.name} uploaded`, "ok");
+    }
     const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
     uploadLine.textContent = `[${ts()}] ✓ Upload done — ${fmtSize(totalSize)} in ${elapsed}s  (${fmtSize(totalSize / (parseFloat(elapsed) || 1))}/s)`;
     setProgress(40);

@@ -35,6 +35,12 @@ body { font-family: 'DM Sans', sans-serif; }
 .pill-vid { background: #1a1a2e; color: #f472b6; }
 .pill-aud { background: #052e16; color: #6ee7b7; }
 .pill-unk { background: #1c1917; color: #a8a29e; }
+#progressLog {
+  min-height: 160px;
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-anchor: none;
+}
 #progressLog::-webkit-scrollbar       { width: 4px; }
 #progressLog::-webkit-scrollbar-track { background: transparent; }
 #progressLog::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }

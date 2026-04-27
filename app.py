@@ -83,7 +83,7 @@ def read_stream(path, chunk_size=1 << 17):
             if not chunk: break
             yield chunk
 @app.after_request
-def no_cache(response):
+def add_headers(response):
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"]        = "no-cache"
     response.headers["Expires"]       = "0"
@@ -96,8 +96,10 @@ def upload_chunk():
     filename     = request.headers.get("X-File-Name", "file")
     tmp_dir      = os.path.join(app.config["UPLOAD_FOLDER"], f"chunks_{file_id}")
     os.makedirs(tmp_dir, exist_ok=True)
-    with open(os.path.join(tmp_dir, f"{chunk_index:05d}"), "wb") as fh:
-        fh.write(request.get_data())
+    chunk_path = os.path.join(tmp_dir, f"{chunk_index:05d}")
+    data = request.get_data()
+    with open(chunk_path, "wb") as fh:
+        fh.write(data)
     chunks_present = len([f for f in os.listdir(tmp_dir) if not f.startswith(".")])
     if chunks_present < total_chunks:
         return jsonify({"ok": True, "chunk": chunk_index, "received": chunks_present, "total": total_chunks})
