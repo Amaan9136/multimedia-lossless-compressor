@@ -177,8 +177,11 @@ compressBtn.addEventListener("click", async () => {
   results.classList.add("hidden");
   clearLog();
   setProgress(0, "Uploading…");
+  addLog("🚀 Starting upload of selected files…");
   const totalSize    = selectedFiles.reduce((s, f) => s + f.size, 0);
+  addLog(`Total size: ${fmtSize(totalSize)} across ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""}`);
   const sessionToken = uid();
+  addLog(`📁 Session ID: ${sessionToken}`);
   const fileManifest = [];
   addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} — ${fmtSize(totalSize)} total`);
   let globalLoaded  = 0;
