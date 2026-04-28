@@ -1,4 +1,4 @@
-const CHUNK_SIZE   = 4 * 1024 * 1024;
+const CHUNK_SIZE   = 2 * 1024 * 1024;
 const MAX_PARALLEL = 4;
 const IMAGE_EXTS = ["jpg","jpeg","png","webp","bmp","tiff","gif"];
 const VIDEO_EXTS = ["mp4","mov","avi","mkv","webm","flv","wmv","m4v"];
@@ -12,6 +12,7 @@ const clearBtn       = document.getElementById("clearBtn");
 const progress       = document.getElementById("progress");
 const progressBar    = document.getElementById("progressBar");
 const progressPct    = document.getElementById("progressPct");
+const progressLabel  = document.getElementById("progressLabel");
 const progressLog    = document.getElementById("progressLog");
 const results        = document.getElementById("results");
 const resultList     = document.getElementById("resultList");
@@ -88,9 +89,10 @@ clearBtn.addEventListener("click", () => {
   renderFileList();
   results.classList.add("hidden");
 });
-function setProgress(pct) {
+function setProgress(pct, label) {
   progressBar.style.width = pct + "%";
   progressPct.textContent = Math.round(pct) + "%";
+  if (label) progressLabel.textContent = label;
 }
 const LOG_COLOR = {info:"text-slate-300", ok:"text-emerald-400", warn:"text-amber-400", error:"text-red-400", debug:"text-slate-500"};
 function addLog(msg, level = "info") {
@@ -125,7 +127,6 @@ async function uploadFile(file, onProgress) {
     if (!resp.ok) throw new Error(`Chunk ${chunk.index} failed: ${resp.status}`);
     bytesPerChunk[chunk.index] = chunk.blob.size;
     onProgress(bytesPerChunk.reduce((a, b) => a + b, 0), file.size);
-    return resp.json();
   }
   const queue = [...chunks];
   async function worker() {
@@ -135,7 +136,7 @@ async function uploadFile(file, onProgress) {
     }
   }
   await Promise.all(Array.from({length: Math.min(MAX_PARALLEL, totalChunks)}, worker));
-  return fileId;
+  return {fileId, name: file.name};
 }
 compressBtn.addEventListener("click", async () => {
   if (!selectedFiles.length) return;
@@ -144,10 +145,10 @@ compressBtn.addEventListener("click", async () => {
   progress.classList.remove("hidden");
   results.classList.add("hidden");
   clearLog();
-  setProgress(0);
-  const totalSize     = selectedFiles.reduce((s, f) => s + f.size, 0);
-  const uploadSession = uid();
-  const fileManifest  = [];
+  setProgress(0, "Uploading…");
+  const totalSize    = selectedFiles.reduce((s, f) => s + f.size, 0);
+  const sessionToken = uid();
+  const fileManifest = [];
   addLog(`📦 ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} — ${fmtSize(totalSize)} total`);
   let globalLoaded  = 0;
   const uploadStart = Date.now();
@@ -157,29 +158,29 @@ compressBtn.addEventListener("click", async () => {
       const file = selectedFiles[fi];
       addLog(`  → [${fi+1}/${selectedFiles.length}] ${file.name}  (${fmtSize(file.size)})`);
       let filePrev = 0;
-      const fileId = await uploadFile(file, (loaded) => {
+      const {fileId, name} = await uploadFile(file, (loaded) => {
         const delta   = loaded - filePrev;
         filePrev      = loaded;
         globalLoaded += delta;
-        setProgress((globalLoaded / totalSize) * 40);
+        setProgress((globalLoaded / totalSize) * 40, "Uploading…");
         const elapsed = (Date.now() - uploadStart) / 1000 || 0.001;
         const rate    = globalLoaded / elapsed;
         const rem     = rate > 0 ? (totalSize - globalLoaded) / rate : 0;
         const eta     = rem > 60 ? `${Math.ceil(rem/60)}m ${Math.round(rem%60)}s` : `${Math.ceil(rem)}s`;
         uploadLine.textContent = `[${ts()}] ⬆  Uploading ${fmtSize(globalLoaded)} / ${fmtSize(totalSize)}  ${fmtSize(rate)}/s  ETA ${eta}`;
       });
-      fileManifest.push({file_id: fileId, name: file.name});
-      addLog(`  ✓ [${fi+1}/${selectedFiles.length}] ${file.name} uploaded`, "ok");
+      fileManifest.push({file_id: fileId, name});
+      addLog(`  ✓ [${fi+1}/${selectedFiles.length}] ${name} uploaded`, "ok");
     }
     const elapsed = ((Date.now() - uploadStart) / 1000).toFixed(1);
     uploadLine.textContent = `[${ts()}] ✓ Upload done — ${fmtSize(totalSize)} in ${elapsed}s  (${fmtSize(totalSize / (parseFloat(elapsed) || 1))}/s)`;
-    setProgress(40);
+    setProgress(40, "Compressing…");
     compressBtn.textContent = "Compressing…";
     addLog("🗜  Starting compression…");
     const compResp = await fetch("/compress", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
-      body:    JSON.stringify({session_id: uploadSession, files: fileManifest}),
+      body:    JSON.stringify({session_id: sessionToken, files: fileManifest}),
     });
     if (!compResp.ok) throw new Error(`Compress request failed: ${compResp.status}`);
     const reader  = compResp.body.getReader();
@@ -189,20 +190,33 @@ compressBtn.addEventListener("click", async () => {
     let   totalFiles = 1;
     while (true) {
       const {done, value} = await reader.read();
-      if (done) break;
+      if (done) {
+        if (buf.trim()) {
+          try {
+            const msg = JSON.parse(buf.trim());
+            if (msg.type === "log") addLog(msg.msg, msg.level || "info");
+            else if (msg.type === "start") { totalFiles = msg.total_files; sessionId = msg.session_id; }
+            else if (msg.type === "progress") setProgress(40 + (msg.index / totalFiles) * 55, "Compressing…");
+            else if (msg.type === "done") { allResults = msg.results; sessionId = msg.session_id; }
+          } catch {}
+        }
+        break;
+      }
       buf += decoder.decode(value, {stream: true});
       const lines = buf.split("\n");
       buf = lines.pop();
       for (const line of lines) {
         if (!line.trim()) continue;
         let msg;
-        try { msg = JSON.parse(line); } catch { continue; }
+        try { msg = JSON.parse(line); } catch { addLog(`[raw] ${line}`, "debug"); continue; }
         if (msg.type === "log") { addLog(msg.msg, msg.level || "info"); continue; }
         if (msg.type === "start") {
           totalFiles = msg.total_files;
           sessionId  = msg.session_id;
         } else if (msg.type === "progress") {
-          setProgress(40 + (msg.index / totalFiles) * 55);
+          setProgress(40 + (msg.index / totalFiles) * 55, "Compressing…");
+        } else if (msg.type === "file_done") {
+          allResults.push(msg.result);
         } else if (msg.type === "done") {
           allResults = msg.results;
           sessionId  = msg.session_id;
@@ -210,8 +224,7 @@ compressBtn.addEventListener("click", async () => {
       }
     }
     renderResults(allResults);
-    setProgress(100);
-    setTimeout(() => { progress.classList.add("hidden"); setProgress(0); }, 1000);
+    setProgress(100, "Done ✓");
   } catch (err) {
     addLog(`✗ Failed: ${err.message}`, "error");
   }

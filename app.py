@@ -1,15 +1,16 @@
-import os, shutil, socket, json, uuid, mimetypes, subprocess, zipfile, threading, time
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+import os, shutil, socket, json, uuid, mimetypes, subprocess, zipfile, threading, queue, time
+from urllib.parse import unquote
+from flask import Flask, request, render_template, Response, stream_with_context
 from flask_cors import CORS
 from PIL import Image
 from werkzeug.serving import WSGIRequestHandler
 WSGIRequestHandler.protocol_version = "HTTP/1.1"
 app = Flask(__name__)
 CORS(app, origins="*")
-app.config["UPLOAD_FOLDER"]        = "uploads"
-app.config["COMPRESSED_FOLDER"]    = "compressed"
-app.config["MAX_CONTENT_LENGTH"]   = None
-app.config["MAX_FORM_MEMORY_SIZE"] = None
+app.config["UPLOAD_FOLDER"]             = "uploads"
+app.config["COMPRESSED_FOLDER"]         = "compressed"
+app.config["MAX_CONTENT_LENGTH"]        = None
+app.config["MAX_FORM_MEMORY_SIZE"]      = None
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 os.makedirs(app.config["UPLOAD_FOLDER"],     exist_ok=True)
 os.makedirs(app.config["COMPRESSED_FOLDER"], exist_ok=True)
@@ -43,44 +44,45 @@ def compress_image(input_path, output_path, filename):
     elif ext == "webp":
         img.save(output_path, "WEBP", quality=72, method=6)
     else:
-        img.save(output_path, optimize=True)
-def compress_video_streaming(input_path, output_path, log_cb):
-    cmd = ["ffmpeg", "-y", "-i", input_path,
-           "-vcodec", "libx264", "-crf", "28", "-preset", "fast",
-           "-acodec", "aac", "-b:a", "128k",
-           "-movflags", "+faststart", output_path]
-    log_cb({"type": "log", "level": "info", "msg": f"▶ ffmpeg start: {os.path.basename(input_path)}"})
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    last = {"line": ""}
-    def _read():
-        for line in proc.stderr:
-            line = line.strip()
-            if line:
-                last["line"] = line
-                if line.startswith("frame="):
-                    log_cb({"type": "log", "level": "debug", "msg": f"  {line}"})
-    t = threading.Thread(target=_read, daemon=True)
-    t.start()
-    proc.wait()
-    t.join(timeout=2)
-    if proc.returncode != 0:
-        log_cb({"type": "log", "level": "error", "msg": f"  ffmpeg exit={proc.returncode} → {last['line'][:120]}"})
-    return proc.returncode == 0
-def compress_audio_streaming(input_path, output_path, log_cb):
-    log_cb({"type": "log", "level": "info", "msg": f"▶ ffmpeg start (audio): {os.path.basename(input_path)}"})
+        img.save(output_path, "JPEG", quality=72, optimize=True, progressive=True)
+def run_ffmpeg(cmd, label, q):
     proc = subprocess.Popen(
-        ["ffmpeg", "-y", "-i", input_path, "-b:a", "128k", output_path],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        bufsize=1,
+        text=True,
     )
+    q.put(emit({"type": "log", "level": "info", "msg": f"▶ ffmpeg: {label}"}))
+    for line in proc.stderr:
+        line = line.rstrip()
+        if line.strip():
+            level = "debug" if line.startswith("frame=") else "info"
+            q.put(emit({"type": "log", "level": level, "msg": f"  {line}"}))
     proc.wait()
-    return proc.returncode == 0
+    q.put(emit({"type": "log", "level": "ok" if proc.returncode == 0 else "error", "msg": f"  ffmpeg exit={proc.returncode}"}))
+    q.put(("__done__", proc.returncode == 0))
+def run_ffmpeg_streaming(cmd, label):
+    q = queue.Queue()
+    t = threading.Thread(target=run_ffmpeg, args=(cmd, label, q), daemon=True)
+    t.start()
+    ok = False
+    while True:
+        item = q.get()
+        if isinstance(item, tuple) and item[0] == "__done__":
+            ok = item[1]
+            break
+        yield item
+    t.join(timeout=5)
+    yield emit({"type": "_ffmpeg_done", "ok": ok})
 def stem(filename):
     return filename.rsplit(".", 1)[0] if "." in filename else filename
 def read_stream(path, chunk_size=1 << 17):
     with open(path, "rb") as f:
         while True:
             chunk = f.read(chunk_size)
-            if not chunk: break
+            if not chunk:
+                break
             yield chunk
 @app.after_request
 def add_headers(response):
@@ -93,23 +95,22 @@ def upload_chunk():
     file_id      = request.headers.get("X-File-Id")
     chunk_index  = int(request.headers.get("X-Chunk-Index", 0))
     total_chunks = int(request.headers.get("X-Total-Chunks", 1))
-    filename     = request.headers.get("X-File-Name", "file")
+    filename     = unquote(request.headers.get("X-File-Name", "file"))
     tmp_dir      = os.path.join(app.config["UPLOAD_FOLDER"], f"chunks_{file_id}")
     os.makedirs(tmp_dir, exist_ok=True)
     chunk_path = os.path.join(tmp_dir, f"{chunk_index:05d}")
-    data = request.get_data()
     with open(chunk_path, "wb") as fh:
-        fh.write(data)
+        fh.write(request.get_data(cache=False))
     chunks_present = len([f for f in os.listdir(tmp_dir) if not f.startswith(".")])
     if chunks_present < total_chunks:
-        return jsonify({"ok": True, "chunk": chunk_index, "received": chunks_present, "total": total_chunks})
+        return {"ok": True, "chunk": chunk_index, "received": chunks_present, "total": total_chunks}
     final_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{file_id}_{filename}")
     with open(final_path, "wb") as out:
         for i in range(total_chunks):
             with open(os.path.join(tmp_dir, f"{i:05d}"), "rb") as ch:
-                out.write(ch.read())
+                shutil.copyfileobj(ch, out)
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    return jsonify({"ok": True, "complete": True, "path": final_path, "file_id": file_id})
+    return {"ok": True, "complete": True, "path": final_path, "file_id": file_id}
 @app.route("/compress", methods=["POST"])
 def compress():
     body         = request.get_json(force=True, silent=True) or {}
@@ -122,11 +123,12 @@ def compress():
         total_compressed_size = 0
         saved_files           = []
         for entry in file_entries:
-            path = os.path.join(app.config["UPLOAD_FOLDER"], f"{entry['file_id']}_{entry['name']}")
+            name = entry["name"]
+            path = os.path.join(app.config["UPLOAD_FOLDER"], f"{entry['file_id']}_{name}")
             if os.path.exists(path):
-                saved_files.append((entry["name"], path))
+                saved_files.append((name, path))
             else:
-                yield emit({"type": "log", "level": "warn", "msg": f"⚠ Missing upload for {entry['name']} (id={entry['file_id']})"})
+                yield emit({"type": "log", "level": "warn", "msg": f"⚠ Missing upload for {name} (expected={path})"})
         total_original_size = sum(os.path.getsize(p) for _, p in saved_files)
         yield emit({"type": "start", "session_id": session_id, "total_files": len(saved_files), "total_original_size": total_original_size})
         yield emit({"type": "log", "level": "info", "msg": f"📦 {len(saved_files)} files — {fmt_size(total_original_size)} total"})
@@ -135,7 +137,7 @@ def compress():
             original_size = os.path.getsize(input_path)
             yield emit({"type": "progress", "file": filename, "index": idx, "total": len(saved_files), "original_size": original_size})
             yield emit({"type": "log", "level": "info", "msg": f"⟳ [{idx+1}/{len(saved_files)}] {filename}  ({fmt_size(original_size)})"})
-            ffmpeg_log = []
+            r = None
             try:
                 if ext in IMAGE_EXTS:
                     out_ext  = ext if ext in ("jpg", "jpeg", "png", "webp") else "jpg"
@@ -149,10 +151,23 @@ def compress():
                 elif ext in VIDEO_EXTS:
                     out_name = stem(filename) + ".mp4"
                     out_path = os.path.join(session_dir, out_name)
+                    cmd = [
+                        "ffmpeg", "-y", "-i", input_path,
+                        "-vcodec", "libx264", "-crf", "28", "-preset", "fast",
+                        "-acodec", "aac", "-b:a", "128k",
+                        "-movflags", "+faststart",
+                        out_path,
+                    ]
                     yield emit({"type": "log", "level": "info", "msg": "  🎬 Encoding video → H.264 CRF28 AAC128k +faststart"})
-                    ok = compress_video_streaming(input_path, out_path, ffmpeg_log.append)
-                    for obj in ffmpeg_log: yield emit(obj)
-                    if ok and os.path.exists(out_path):
+                    ok = False
+                    for chunk in run_ffmpeg_streaming(cmd, filename):
+                        obj = json.loads(chunk.strip())
+                        if obj.get("type") == "_ffmpeg_done":
+                            ok = obj["ok"]
+                        else:
+                            yield chunk
+                    ok = ok and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+                    if ok:
                         compressed_size        = os.path.getsize(out_path)
                         total_compressed_size += compressed_size
                         r = {"name": out_name, "original": filename, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"}
@@ -161,9 +176,17 @@ def compress():
                 elif ext in AUDIO_EXTS:
                     out_name = stem(filename) + ".mp3"
                     out_path = os.path.join(session_dir, out_name)
+                    cmd = ["ffmpeg", "-y", "-i", input_path, "-b:a", "128k", out_path]
                     yield emit({"type": "log", "level": "info", "msg": "  🔊 Encoding audio → MP3 128k"})
-                    ok = compress_audio_streaming(input_path, out_path, ffmpeg_log.append)
-                    if ok and os.path.exists(out_path):
+                    ok = False
+                    for chunk in run_ffmpeg_streaming(cmd, filename):
+                        obj = json.loads(chunk.strip())
+                        if obj.get("type") == "_ffmpeg_done":
+                            ok = obj["ok"]
+                        else:
+                            yield chunk
+                    ok = ok and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+                    if ok:
                         compressed_size        = os.path.getsize(out_path)
                         total_compressed_size += compressed_size
                         r = {"name": out_name, "original": filename, "original_size": original_size, "compressed_size": compressed_size, "status": "ok"}
@@ -180,19 +203,24 @@ def compress():
                 saved = round((1 - r["compressed_size"] / r["original_size"]) * 100) if r["original_size"] else 0
                 yield emit({"type": "log", "level": "ok", "msg": f"  ✓ {r['name']}  {fmt_size(r['original_size'])} → {fmt_size(r['compressed_size'])}  (−{saved}%)"})
             yield emit({"type": "file_done", "result": r, "total_compressed_size": total_compressed_size})
-            try: os.remove(input_path)
-            except OSError: pass
+            try:
+                os.remove(input_path)
+            except OSError:
+                pass
         total_saved = total_original_size - total_compressed_size
         pct = round((total_saved / total_original_size) * 100) if total_original_size else 0
         yield emit({"type": "log", "level": "ok", "msg": f"📊 Done — {fmt_size(total_original_size)} → {fmt_size(total_compressed_size)}  saved {fmt_size(total_saved)} ({pct}%)"})
         yield emit({"type": "done", "session_id": session_id, "results": results, "total_original_size": total_original_size, "total_compressed_size": total_compressed_size})
-    return Response(stream_with_context(generate()), mimetype="application/x-ndjson",
-                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache", "Transfer-Encoding": "chunked"})
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 @app.route("/download/<session_id>/<filename>")
 def download_file(session_id, filename):
     path = os.path.join(app.config["COMPRESSED_FOLDER"], session_id, filename)
     if not os.path.exists(path):
-        return jsonify({"error": "File not found"}), 404
+        return {"error": "File not found"}, 404
     mime      = mimetypes.guess_type(path)[0] or "application/octet-stream"
     file_size = os.path.getsize(path)
     rng       = request.headers.get("Range")
@@ -207,7 +235,8 @@ def download_file(session_id, filename):
                 remaining = length
                 while remaining > 0:
                     chunk = f.read(min(131072, remaining))
-                    if not chunk: break
+                    if not chunk:
+                        break
                     remaining -= len(chunk)
                     yield chunk
         return Response(gen_range(), status=206, mimetype=mime, headers={
@@ -225,7 +254,7 @@ def download_file(session_id, filename):
 def download_all(session_id):
     folder = os.path.join(app.config["COMPRESSED_FOLDER"], session_id)
     if not os.path.exists(folder):
-        return jsonify({"error": "Session not found"}), 404
+        return {"error": "Session not found"}, 404
     zip_path = os.path.join(app.config["COMPRESSED_FOLDER"], f"{session_id}.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
         for fname in os.listdir(folder):
@@ -242,8 +271,8 @@ def cleanup_session(session_id):
     if os.path.exists(folder):   shutil.rmtree(folder); removed.append("files")
     if os.path.exists(zip_path): os.remove(zip_path);   removed.append("zip")
     if not removed:
-        return jsonify({"error": "Session not found"}), 404
-    return jsonify({"ok": True, "removed": removed})
+        return {"error": "Session not found"}, 404
+    return {"ok": True, "removed": removed}
 @app.route("/")
 def index():
     return render_template("index.html")
