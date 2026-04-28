@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Squish — Media Compressor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Squish - Media Compressor</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -16,16 +16,16 @@
       <span class="text-3xl">⚡</span>
       <h1 class="text-4xl font-extrabold tracking-tight font-syne text-white">Squish</h1>
     </div>
-    <p class="text-slate-400 font-dm text-sm">Compress images, videos &amp; audio — lossless quality, massive size reduction</p>
+    <p class="text-slate-400 font-dm text-sm">Compress images, videos &amp; audio - lossless quality, massive size reduction</p>
   </header>
   <div id="dropzone" class="drop-zone rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900/50 p-10 text-center cursor-pointer transition-all hover:border-violet-500 hover:bg-slate-900 mb-6">
     <div class="pointer-events-none">
       <div class="text-5xl mb-3">📦</div>
       <p class="font-syne font-bold text-lg text-white mb-1">Drop files here</p>
-      <p class="text-slate-400 text-sm font-dm">or tap to browse — images, videos, audio</p>
+      <p class="text-slate-400 text-sm font-dm">or tap to browse - images, videos, audio</p>
       <p class="text-slate-600 text-xs mt-2 font-dm">JPG · PNG · WEBP · MP4 · MOV · MP3 · WAV · and more</p>
     </div>
-    <input type="file" id="fileInput" multiple accept="image/*,video/*,audio/*" class="hidden">
+    <input type="file" id="fileInput" multiple accept="*/*" class="hidden">
   </div>
   <div id="fileList" class="space-y-2 mb-6 hidden"></div>
   <div id="actions" class="hidden flex gap-3 mb-8">

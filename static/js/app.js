@@ -1,5 +1,5 @@
-const CHUNK_SIZE   = 2 * 1024 * 1024;
-const MAX_PARALLEL = 4;
+const CHUNK_SIZE   = 512 * 1024;
+const MAX_PARALLEL = 2;
 const IMAGE_EXTS = ["jpg","jpeg","png","webp","bmp","tiff","gif"];
 const VIDEO_EXTS = ["mp4","mov","avi","mkv","webm","flv","wmv","m4v"];
 const AUDIO_EXTS = ["mp3","wav","flac","aac","ogg","m4a","wma"];
@@ -104,39 +104,70 @@ function addLog(msg, level = "info") {
   return line;
 }
 function clearLog() { progressLog.innerHTML = ""; }
+async function uploadChunkWithRetry(fileId, chunkIndex, totalChunks, filename, blob, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const resp = await fetch("/upload-chunk", {
+        method:  "POST",
+        headers: {
+          "X-File-Id":      fileId,
+          "X-Chunk-Index":  String(chunkIndex),
+          "X-Total-Chunks": String(totalChunks),
+          "X-File-Name":    encodeURIComponent(filename),
+          "Content-Type":   "application/octet-stream",
+        },
+        body: blob,
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    } catch (err) {
+      if (attempt === retries - 1) throw new Error(`Chunk ${chunkIndex} failed after ${retries} attempts: ${err.message}`);
+      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+}
 async function uploadFile(file, onProgress) {
   const fileId        = uid();
   const totalChunks   = Math.ceil(file.size / CHUNK_SIZE) || 1;
-  const bytesPerChunk = new Array(totalChunks).fill(0);
-  const chunks = Array.from({length: totalChunks}, (_, i) => ({
+  const bytesUploaded = new Array(totalChunks).fill(0);
+  const chunks        = Array.from({length: totalChunks}, (_, i) => ({
     index: i,
     blob:  file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size)),
   }));
-  async function uploadChunk(chunk) {
-    const resp = await fetch("/upload-chunk", {
-      method: "POST",
-      headers: {
-        "X-File-Id":      fileId,
-        "X-Chunk-Index":  String(chunk.index),
-        "X-Total-Chunks": String(totalChunks),
-        "X-File-Name":    encodeURIComponent(file.name),
-        "Content-Type":   "application/octet-stream",
-      },
-      body: chunk.blob,
-    });
-    if (!resp.ok) throw new Error(`Chunk ${chunk.index} failed: ${resp.status}`);
-    bytesPerChunk[chunk.index] = chunk.blob.size;
-    onProgress(bytesPerChunk.reduce((a, b) => a + b, 0), file.size);
-  }
   const queue = [...chunks];
   async function worker() {
     while (queue.length) {
       const chunk = queue.shift();
-      if (chunk) await uploadChunk(chunk);
+      if (!chunk) break;
+      await uploadChunkWithRetry(fileId, chunk.index, totalChunks, file.name, chunk.blob);
+      bytesUploaded[chunk.index] = chunk.blob.size;
+      onProgress(bytesUploaded.reduce((a, b) => a + b, 0), file.size);
     }
   }
-  await Promise.all(Array.from({length: Math.min(MAX_PARALLEL, totalChunks)}, worker));
+  const parallelism = isMobile() ? 1 : Math.min(MAX_PARALLEL, totalChunks);
+  await Promise.all(Array.from({length: parallelism}, worker));
   return {fileId, name: file.name};
+}
+async function readNDJSON(response, onMessage) {
+  const reader  = response.body.getReader();
+  const decoder = new TextDecoder();
+  let   buf     = "";
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) {
+      if (buf.trim()) {
+        try { onMessage(JSON.parse(buf.trim())); } catch {}
+      }
+      break;
+    }
+    buf += decoder.decode(value, {stream: true});
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try { onMessage(JSON.parse(line)); } catch { addLog(`[raw] ${line}`, "debug"); }
+    }
+  }
 }
 compressBtn.addEventListener("click", async () => {
   if (!selectedFiles.length) return;
@@ -183,46 +214,23 @@ compressBtn.addEventListener("click", async () => {
       body:    JSON.stringify({session_id: sessionToken, files: fileManifest}),
     });
     if (!compResp.ok) throw new Error(`Compress request failed: ${compResp.status}`);
-    const reader  = compResp.body.getReader();
-    const decoder = new TextDecoder();
-    let   buf        = "";
-    let   allResults = [];
-    let   totalFiles = 1;
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) {
-        if (buf.trim()) {
-          try {
-            const msg = JSON.parse(buf.trim());
-            if (msg.type === "log") addLog(msg.msg, msg.level || "info");
-            else if (msg.type === "start") { totalFiles = msg.total_files; sessionId = msg.session_id; }
-            else if (msg.type === "progress") setProgress(40 + (msg.index / totalFiles) * 55, "Compressing…");
-            else if (msg.type === "done") { allResults = msg.results; sessionId = msg.session_id; }
-          } catch {}
-        }
-        break;
+    let allResults = [];
+    let totalFiles = 1;
+    await readNDJSON(compResp, (msg) => {
+      if (msg.type === "log") {
+        addLog(msg.msg, msg.level || "info");
+      } else if (msg.type === "start") {
+        totalFiles = msg.total_files;
+        sessionId  = msg.session_id;
+      } else if (msg.type === "progress") {
+        setProgress(40 + (msg.index / totalFiles) * 55, "Compressing…");
+      } else if (msg.type === "file_done") {
+        allResults.push(msg.result);
+      } else if (msg.type === "done") {
+        allResults = msg.results;
+        sessionId  = msg.session_id;
       }
-      buf += decoder.decode(value, {stream: true});
-      const lines = buf.split("\n");
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let msg;
-        try { msg = JSON.parse(line); } catch { addLog(`[raw] ${line}`, "debug"); continue; }
-        if (msg.type === "log") { addLog(msg.msg, msg.level || "info"); continue; }
-        if (msg.type === "start") {
-          totalFiles = msg.total_files;
-          sessionId  = msg.session_id;
-        } else if (msg.type === "progress") {
-          setProgress(40 + (msg.index / totalFiles) * 55, "Compressing…");
-        } else if (msg.type === "file_done") {
-          allResults.push(msg.result);
-        } else if (msg.type === "done") {
-          allResults = msg.results;
-          sessionId  = msg.session_id;
-        }
-      }
-    }
+    });
     renderResults(allResults);
     setProgress(100, "Done ✓");
   } catch (err) {

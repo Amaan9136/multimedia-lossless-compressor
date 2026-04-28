@@ -1,4 +1,4 @@
-import os, shutil, socket, json, uuid, mimetypes, subprocess, zipfile, threading, queue, time
+import os, shutil, socket, json, uuid, mimetypes, subprocess, zipfile, threading, queue
 from urllib.parse import unquote
 from flask import Flask, request, render_template, Response, stream_with_context
 from flask_cors import CORS
@@ -6,7 +6,7 @@ from PIL import Image
 from werkzeug.serving import WSGIRequestHandler
 WSGIRequestHandler.protocol_version = "HTTP/1.1"
 app = Flask(__name__)
-CORS(app, origins="*")
+CORS(app, origins="*", expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"])
 app.config["UPLOAD_FOLDER"]             = "uploads"
 app.config["COMPRESSED_FOLDER"]         = "compressed"
 app.config["MAX_CONTENT_LENGTH"]        = None
@@ -89,9 +89,14 @@ def add_headers(response):
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"]        = "no-cache"
     response.headers["Expires"]       = "0"
+    response.headers["Access-Control-Allow-Origin"]  = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-File-Id, X-Chunk-Index, X-Total-Chunks, X-File-Name"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
     return response
-@app.route("/upload-chunk", methods=["POST"])
+@app.route("/upload-chunk", methods=["OPTIONS", "POST"])
 def upload_chunk():
+    if request.method == "OPTIONS":
+        return "", 204
     file_id      = request.headers.get("X-File-Id")
     chunk_index  = int(request.headers.get("X-Chunk-Index", 0))
     total_chunks = int(request.headers.get("X-Total-Chunks", 1))
@@ -111,8 +116,10 @@ def upload_chunk():
                 shutil.copyfileobj(ch, out)
     shutil.rmtree(tmp_dir, ignore_errors=True)
     return {"ok": True, "complete": True, "path": final_path, "file_id": file_id}
-@app.route("/compress", methods=["POST"])
+@app.route("/compress", methods=["OPTIONS", "POST"])
 def compress():
+    if request.method == "OPTIONS":
+        return "", 204
     body         = request.get_json(force=True, silent=True) or {}
     session_id   = body.get("session_id") or str(uuid.uuid4())
     file_entries = body.get("files", [])
@@ -214,7 +221,11 @@ def compress():
     return Response(
         stream_with_context(generate()),
         mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        headers={
+            "X-Accel-Buffering":  "no",
+            "Cache-Control":      "no-cache",
+            "Transfer-Encoding":  "chunked",
+        },
     )
 @app.route("/download/<session_id>/<filename>")
 def download_file(session_id, filename):
