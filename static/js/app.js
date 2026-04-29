@@ -1,5 +1,5 @@
-const CHUNK_SIZE = 4 * 1024 * 1024;
-const MAX_CONCURRENT = 8;
+const CHUNK_SIZE = 16 * 1024 * 1024;
+const MAX_CONCURRENT = 16;
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "gif"];
 const VIDEO_EXTS = ["mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v"];
 const AUDIO_EXTS = ["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"];
@@ -132,7 +132,7 @@ async function uploadChunkWithRetry(fileId, chunkIndex, totalChunks, filename, b
   }
 }
 async function uploadAllFiles(files, onProgress) {
-  const concurrency = isMobile() ? 3 : MAX_CONCURRENT;
+  const concurrency = isMobile() ? 6 : MAX_CONCURRENT;
   const fileIds = files.map(() => uid());
   const bytesUploaded = files.map(f => new Array(Math.ceil(f.size / CHUNK_SIZE) || 1).fill(0));
   const tasks = [];

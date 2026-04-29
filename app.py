@@ -17,7 +17,7 @@ os.makedirs(app.config["UPLOAD_FOLDER"],     exist_ok=True)
 os.makedirs(app.config["COMPRESSED_FOLDER"], exist_ok=True)
 _chunk_locks      = {}
 _chunk_locks_lock = threading.Lock()
-_write_pool       = ThreadPoolExecutor(max_workers=16)
+_write_pool       = ThreadPoolExecutor(max_workers=32)
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -36,6 +36,7 @@ def fmt_size(b):
 IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "bmp", "tiff", "gif"}
 VIDEO_EXTS = {"mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v"}
 AUDIO_EXTS = {"mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"}
+_CPU = os.cpu_count() or 4
 def compress_image(input_path, output_path, filename):
     ext = filename.rsplit(".", 1)[-1].lower()
     img = Image.open(input_path)
@@ -81,7 +82,7 @@ def run_ffmpeg_streaming(cmd, label):
     yield emit({"type": "_ffmpeg_done", "ok": ok})
 def stem(filename):
     return filename.rsplit(".", 1)[0] if "." in filename else filename
-def read_stream(path, chunk_size=1 << 17):
+def read_stream(path, chunk_size=1 << 19):
     with open(path, "rb") as f:
         while True:
             chunk = f.read(chunk_size)
@@ -124,7 +125,7 @@ def upload_chunk():
         with open(final_path, "wb") as out:
             for i in range(total_chunks):
                 with open(os.path.join(tmp_dir, f"{i:05d}"), "rb") as ch:
-                    shutil.copyfileobj(ch, out, length=1 << 20)
+                    shutil.copyfileobj(ch, out, length=1 << 22)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         with _chunk_locks_lock:
             _chunk_locks.pop(file_id, None)
@@ -157,7 +158,8 @@ def compress():
                 out_path = os.path.join(session_dir, out_name)
                 cmd = [
                     "ffmpeg", "-y", "-i", input_path,
-                    "-vcodec", "libx264", "-crf", "28", "-preset", "fast",
+                    "-vcodec", "libx264", "-crf", "28", "-preset", "ultrafast",
+                    "-threads", str(max(2, _CPU // 2)),
                     "-acodec", "aac", "-b:a", "128k",
                     "-movflags", "+faststart",
                     out_path,
@@ -176,7 +178,7 @@ def compress():
             elif ext in AUDIO_EXTS:
                 out_name = stem(filename) + ".mp3"
                 out_path = os.path.join(session_dir, out_name)
-                cmd = ["ffmpeg", "-y", "-i", input_path, "-b:a", "128k", out_path]
+                cmd = ["ffmpeg", "-y", "-i", input_path, "-b:a", "128k", "-threads", str(max(2, _CPU // 2)), out_path]
                 q.put(emit({"type": "log", "level": "info", "msg": "  🔊 Encoding audio → MP3 128k"}))
                 ok = False
                 for item in run_ffmpeg_streaming(cmd, filename):
@@ -218,7 +220,7 @@ def compress():
         q          = queue.Queue()
         results    = []
         total_compressed_size = 0
-        workers    = min(os.cpu_count() or 4, total_files) if total_files else 1
+        workers    = min(max(_CPU, 8), total_files) if total_files else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for idx, (filename, input_path) in enumerate(saved_files):
                 pool.submit(compress_one, idx, filename, input_path, total_files, q)
@@ -266,7 +268,7 @@ def download_file(session_id, filename):
                 f.seek(start)
                 remaining = length
                 while remaining > 0:
-                    chunk = f.read(min(131072, remaining))
+                    chunk = f.read(min(1 << 19, remaining))
                     if not chunk:
                         break
                     remaining -= len(chunk)
