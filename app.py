@@ -14,6 +14,8 @@ app.config["MAX_FORM_MEMORY_SIZE"]      = None
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 os.makedirs(app.config["UPLOAD_FOLDER"],     exist_ok=True)
 os.makedirs(app.config["COMPRESSED_FOLDER"], exist_ok=True)
+_chunk_locks = {}
+_chunk_locks_lock = threading.Lock()
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -104,17 +106,29 @@ def upload_chunk():
     tmp_dir      = os.path.join(app.config["UPLOAD_FOLDER"], f"chunks_{file_id}")
     os.makedirs(tmp_dir, exist_ok=True)
     chunk_path = os.path.join(tmp_dir, f"{chunk_index:05d}")
-    with open(chunk_path, "wb") as fh:
-        fh.write(request.get_data(cache=False))
-    chunks_present = len([f for f in os.listdir(tmp_dir) if not f.startswith(".")])
-    if chunks_present < total_chunks:
-        return {"ok": True, "chunk": chunk_index, "received": chunks_present, "total": total_chunks}
-    final_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{file_id}_{filename}")
-    with open(final_path, "wb") as out:
-        for i in range(total_chunks):
-            with open(os.path.join(tmp_dir, f"{i:05d}"), "rb") as ch:
-                shutil.copyfileobj(ch, out)
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+    data = request.get_data(cache=False)
+    def write_chunk():
+        with open(chunk_path, "wb") as fh:
+            fh.write(data)
+    t = threading.Thread(target=write_chunk, daemon=True)
+    t.start()
+    t.join()
+    with _chunk_locks_lock:
+        if file_id not in _chunk_locks:
+            _chunk_locks[file_id] = threading.Lock()
+        lock = _chunk_locks[file_id]
+    with lock:
+        chunks_present = len([f for f in os.listdir(tmp_dir) if not f.startswith(".")])
+        if chunks_present < total_chunks:
+            return {"ok": True, "chunk": chunk_index, "received": chunks_present, "total": total_chunks}
+        final_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{file_id}_{filename}")
+        with open(final_path, "wb") as out:
+            for i in range(total_chunks):
+                with open(os.path.join(tmp_dir, f"{i:05d}"), "rb") as ch:
+                    shutil.copyfileobj(ch, out)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        with _chunk_locks_lock:
+            _chunk_locks.pop(file_id, None)
     return {"ok": True, "complete": True, "path": final_path, "file_id": file_id}
 @app.route("/compress", methods=["OPTIONS", "POST"])
 def compress():
